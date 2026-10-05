@@ -551,3 +551,72 @@ lib/
 - QRのセルをタスクごとに割り当てる具体的な方式(モックの方式をそのまま採用するか)
 - 液体の波の描画をFlutterでどう実装するか
 
+
+## 変更記録 v5(2026-10-05): DB設計の確定
+
+### 1. 反映状況
+- Migration 7ファイル(`supabase/migrations/20261005010000` 〜 `20261005070000`)を本番に適用済み
+- 仕様書10章との照合で見つかったずれを `20261005080000_spec_alignment.sql` で修正(本番反映は別途)
+- pgTAP 57項目(`supabase/tests/database/001_schema_constraints_rls.test.sql`)
+- 適用済みのMigrationは書き換えない。修正は新しいMigrationで行う
+
+### 2. 決定事項(①〜⑦)
+| # | 項目 | 決定 | 理由 | 却下した案 |
+|---|---|---|---|---|
+| ① | QR行の作成時期 | **SUCCESS時に作成** | SUCCESS前はトークンがDBにもクライアントにも存在せず、漏洩しない。進行中画面は仮パターンを表示し、成功演出で本物に入れ替える | チャレンジ作成時に作成して利用拒否(トークンが先に端末へ渡る) / PENDING状態を追加(仕様にない状態が増える) |
+| ② | ポイント失効(3か月) | 付与行に `remaining_amount` と `expires_at` を持ち、**期限が近い順(FIFO)に消費** | 付与ごとに期限が違い、一部使用後の失効額を決めるのに必要 | 残高のみ保持(3か月失効を満たせない) |
+| ③ | 同時進行のChallenge | **ユーザーごとに1件**(WAITING / IN_PROGRESS)。部分ユニークインデックスで保証 | 後から緩めるのは容易 | 制限なし(同一タスクが複数Challengeに入る場合などの考慮が増える) |
+| ④ | タスク削除時の `challenge_tasks.task_id` | `ON DELETE SET NULL`。`task_name_snapshot` で履歴を保持 | 元タスクは自由に削除でき、履歴とChallengeは変わらない | 進行中のタスクは削除禁止(ユーザーが混乱) |
+| ⑤ | purchases / cashouts の status | `PENDING` / `COMPLETED` / `FAILED` | `completed_at` があり、この流れが自然 | - |
+| ⑥ | `auto_start_at` と `deadline` | 起点はChallenge作成時刻、`auto_start_at` は5分後。`deadline > auto_start_at` をCHECK | 開始前に期限が来る事態を防ぐ | - |
+| ⑦ | 手数料10%の端数 | `cashouts.points_used` は10の倍数に限定。`fee_points = points_used / 10` をCHECK | ポイントは整数で、端数が出ない | 端数の切り捨て・切り上げ(丸めの扱いが増える) |
+
+### 3. Migration作成時の追加決定
+| # | 決定 | 理由 | デメリット |
+|---|---|---|---|
+| 1 | `routine_tasks` / `challenge_tasks` に `user_id` を持たせ、**複合FKで持ち主の一致を保証** | RLSの漏れや `service_role` 経由でも不整合が入らない | 列が増え、INSERT時に `user_id` が必要 |
+| 2 | SUCCESS遷移をDBで検証(タスク1件以上かつ全完了、`finished_at <= deadline`) | 関数側のバグがあっても不正な成功を止める | 関数側のロジックと二重管理 |
+| 3 | WAITING → FAILED の直接遷移は禁止 | 厳しい側から始め、後から緩める | 開始前の取消機能を足す際はMigrationが必要 |
+| 4 | Challenge作成はpaymentが `SUCCESS` のときのみ | 「決済成功後に作成」をDBが強制 | 決済と作成の間の失敗は⑧で別途対応 |
+| 5 | 台帳・履歴の物理削除を禁止。`point_transactions` は `remaining_amount` の減算のみ可 | 監査と二重付与防止の土台 | 誤データの修正は打ち消し行の追加になる |
+| 6 | 列単位のGRANT(`tasks` は `name` のみ更新可など) | `user_id` の付け替えを権限段階で止める | 列追加のたびにGRANTが必要 |
+| 7 | サインアップトリガーは例外を握りつぶさない | 失敗を隠すと `users` 行のないユーザーが静かにできる | トリガー失敗時はサインアップも失敗 |
+| 8 | ポイント付与(GRANT)は **FAILED のChallengeに対してのみ**許可 | 仕様書7章「FAILED時に付与」をDBが強制し、SUCCESSへの誤付与を防ぐ | 付与条件を広げる場合はMigrationが必要 |
+
+### 4. 技術方針
+- ID は `uuid`(`gen_random_uuid()`)、時刻は `timestamptz`、statusは `text + CHECK`(enum型は使わない)
+- ユーザー参照のFKはすべて `ON DELETE RESTRICT`。退会は `deleted_at` で扱う
+- 書き込みはサーバー側関数のみ。クライアントは `tasks` / `routines` / `routine_tasks` と `users.user_name` のみ書き込み可
+- `anon` は何も不可。`idempotency_keys` はクライアントから一切不可
+- 関数は `SECURITY DEFINER` + `search_path` 固定。実行権限は既定で誰にも与えず、使うものだけ個別に許可する
+- ロック順序: `challenges` → `challenge_tasks` → `qr_codes` → `points` → `point_transactions`
+- 完了判定は、Challenge行を `FOR UPDATE` で取得した後に `clock_timestamp()` と `deadline` を比べる(`now()` は使わない)。cronのFAILED化は最大1分遅れるため、IN_PROGRESSでも関数側で時刻を見て `deadline_exceeded` を返す
+- 列指定の `ON DELETE SET NULL (task_id)` のため、PostgreSQL 15以上が必要
+
+### 5. 影響範囲(仕様書の各章への影響)
+| 章 | 影響 |
+|---|---|
+| 2章 金額・期限・チャレンジ / UC8 | ③により、WAITING / IN_PROGRESS のChallengeはユーザーごとに1件まで。進行中は新しいChallengeを作れない |
+| 5章 タスク・ルーティーン | ④により、元タスクを削除してもChallengeと履歴は変わらない(`task_name_snapshot` で保持) |
+| 7章 成功・失敗・ポイント | ②付与ごとに3か月の期限を持ち、期限が近い順に消費・失効する。⑦現金化に使うポイントは10の倍数。ポイント付与はFAILEDのChallengeのみ(追加決定8) |
+| 8章 QR / 9章 UI | ①QRはSUCCESS時に作成する。進行中のセル表示は仮パターンで、読み取れるQRはSUCCESS時に初めて出る。13章「SUCCESS+QR AVAILABLE化を一体で確定」はこの方式で満たす |
+| 10章 データモデル | 実装は10章に加えて次の列を持つ: `routine_tasks`(user_id, sort_order, created_at) / `challenge_tasks`(user_id, sort_order, updated_at) / `point_transactions`(remaining_amount, purchase_id, cashout_id) / `idempotency_keys`(request_hash, response, expires_at) / `payments`・`challenges`・`purchases`・`cashouts` の updated_at |
+| 12章 状態遷移 | WAITING → FAILED は禁止。SUCCESSへの遷移はDBでも検証する(全タスク完了、`finished_at <= deadline`) |
+| 13章 Transaction・競合制御 | ロック順序の末尾に `points` → `point_transactions` を追加する |
+| 19章 テスト | 制約・遷移・RLS・二重付与防止は、pgTAP 57項目で確認済み |
+
+### 6. 仕様書10章との照合結果(0008で対応)
+| 項目 | 結果 | 対応 |
+|---|---|---|
+| `purchases.item_name` | 仕様書にあるが0005で漏れていた | 0008で追加(NOT NULL) |
+| `idempotency_keys` の `operation` / `resource_id` | 仕様書にあるが0005で漏れていた | 0008で追加。0005で独自に入れた `request_hash` は必須をやめた |
+| 外部決済ID | 仕様書の `payments` に無く、PayPayはモック | 追加しない |
+| 他のテーブル | 仕様書の列を満たしている(`updated_at` など一部は仕様書より多い) | 変更なし |
+
+### 7. 未確定事項
+- **⑧ 決済成功後にChallengeを作らず離脱したpayment**: 今回は対応しない
+- **`point_transactions.type` の値**: 仕様書に値の定義がない。現在は `GRANT` / `PURCHASE` / `CASHOUT` / `EXPIRE`
+- **金額とポイントの換算**: 仕様書に記載がない。付与額とChallenge金額の関係、`cashouts.cash_amount` の式チェックは未設定
+- **開始前の取り消し**: 仕様書2章に「取り消しは取り消し完了とする」とあるが、対応する状態・遷移の定義がない。現在は WAITING → FAILED を禁止
+- **QRセルの割り当て方式**(v4から継続): 進行中の表示は仮パターンで、読み取れるQRはSUCCESS時に作成される
+- **未作成のもの**: Challenge作成・完了・失効などのサーバー関数、pg_cronのジョブ、`idempotency_keys` の期限切れ削除

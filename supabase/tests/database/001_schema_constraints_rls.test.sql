@@ -1,7 +1,7 @@
 -- pgTAP: 制約・トリガー・RLS・権限のテスト(全体を1トランザクションで実行し、最後にロールバック)
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(53);
+select plan(57);
 
 -- ===== 準備: ユーザー(alice / bob) =====
 insert into auth.users (id, raw_user_meta_data) values
@@ -121,11 +121,17 @@ select throws_ok($$update public.qr_codes set status = 'AVAILABLE', used_at = nu
           'P0001', null, 'USED のQRは戻せない');
 
 -- ===== 6. ポイント台帳 / cashouts =====
-select lives_ok($$insert into public.point_transactions(user_id, type, amount, challenge_id, remaining_amount, expires_at)
-          values ('aaaaaaaa-0000-0000-0000-000000000001', 'GRANT', 50, 'dddddddd-0000-0000-0000-000000000001', 50, now() + interval '3 months')$$,
-          'ポイントを付与できる');
+-- ポイント付与は FAILED のChallengeに対してのみ
 select throws_ok($$insert into public.point_transactions(user_id, type, amount, challenge_id, remaining_amount, expires_at)
           values ('aaaaaaaa-0000-0000-0000-000000000001', 'GRANT', 50, 'dddddddd-0000-0000-0000-000000000001', 50, now() + interval '3 months')$$,
+          'P0001', null, 'SUCCESS のChallengeにはポイントを付与できない');
+update public.challenges set status = 'IN_PROGRESS', started_at = now() where id = 'dddddddd-0000-0000-0000-000000000002';
+update public.challenges set status = 'FAILED', finished_at = now() where id = 'dddddddd-0000-0000-0000-000000000002';
+select lives_ok($$insert into public.point_transactions(user_id, type, amount, challenge_id, remaining_amount, expires_at)
+          values ('bbbbbbbb-0000-0000-0000-000000000002', 'GRANT', 50, 'dddddddd-0000-0000-0000-000000000002', 50, now() + interval '3 months')$$,
+          'FAILED のChallengeにはポイントを付与できる');
+select throws_ok($$insert into public.point_transactions(user_id, type, amount, challenge_id, remaining_amount, expires_at)
+          values ('bbbbbbbb-0000-0000-0000-000000000002', 'GRANT', 50, 'dddddddd-0000-0000-0000-000000000002', 50, now() + interval '3 months')$$,
           '23505', null, '同じChallengeへの二重付与は拒否');
 select lives_ok($$update public.point_transactions set remaining_amount = 20$$,
           'remaining_amount は減らせる');
@@ -141,6 +147,15 @@ select throws_ok($$insert into public.cashouts(user_id, points_used, fee_points,
 select throws_ok($$insert into public.cashouts(user_id, points_used, fee_points, cash_amount)
           values ('aaaaaaaa-0000-0000-0000-000000000001', 100, 5, 95)$$,
           '23514', null, '手数料が10%でないと拒否');
+
+-- ===== 6b. 仕様書10章との整合 =====
+select throws_ok($$insert into public.purchases(user_id, points_used) values ('aaaaaaaa-0000-0000-0000-000000000001', 10)$$,
+          '23502', null, 'purchases は item_name が必須');
+select lives_ok($$insert into public.purchases(user_id, points_used, item_name) values ('aaaaaaaa-0000-0000-0000-000000000001', 10, '参考書')$$,
+          'purchases を item_name 付きで作れる');
+select lives_ok($$insert into public.idempotency_keys(user_id, key, operation, resource_id)
+          values ('aaaaaaaa-0000-0000-0000-000000000001', 'k1', 'complete-task', 'dddddddd-0000-0000-0000-000000000001')$$,
+          'idempotency_keys を仕様書の列(operation / resource_id)で作れる');
 
 -- ===== 7. ルーティン =====
 insert into public.tasks(id, user_id, name) values ('eeeeeeee-0000-0000-0000-000000000003', 'aaaaaaaa-0000-0000-0000-000000000001', 'Task C');
