@@ -105,6 +105,250 @@
 - [ ] PaymentとChallengeは別エンティティで管理する。
 - [ ] 将来、本物の決済サービスへ差し替えやすい構造にする。
 
+### 6.1 Mock Payment API（確定仕様）
+
+Mock Paymentは認証済みユーザー専用のサーバー処理とし、Flutterから`payments`へ直接INSERT/UPDATEしない。FlutterはEdge Functionを呼び出し、Edge FunctionはPostgreSQL RPCを経由してPaymentを操作する。本番決済API、実際のQR決済、`service_role`を処理主体として使用しない。
+
+Paymentの状態遷移は次の2つだけを許可する。
+
+```text
+PENDING → SUCCESS
+PENDING → FAILED
+```
+
+`SUCCESS`と`FAILED`は終端状態とする。PENDING Paymentは自動FAILEDにしない。PENDINGまたはFAILEDのPaymentが存在していても、新しいidempotency keyによる新規Payment作成を許可する。FAILED Paymentは再利用・再開せず、再試行時は新しいPaymentを作成する。
+
+#### `mock-payment-create`
+
+Request:
+
+```json
+{
+  "amount": 1000,
+  "idempotency_key": "client-generated-key"
+}
+```
+
+入力はJSON objectとする。`amount`はfiniteなnumberで、`Number.isInteger()`を満たし、100以上5000以下かつ100円単位でなければならない。`"1000"`のような文字列は拒否する。JSON parse後に整数値となる`1000.0`および`1e3`は許可する。
+
+`idempotency_key`は1〜200文字とし、trim後に空文字となる値および前後に空白を含む値は拒否する。unknown fieldは禁止する。`user_id`、`status`、`paid_at`、`created_at`、`updated_at`などのサーバー管理項目はクライアントから指定できない。
+
+サーバーはJWTから`auth.uid()`を取得し、PaymentをPENDINGで作成する。`id`はDBが生成し、`user_id`は`auth.uid()`、`paid_at`はNULL、timestampsはDBが生成する。Payment作成とidempotency record保存は同一transactionで処理する。
+
+初回のResponseはHTTP 201とする。
+
+```json
+{
+  "payment": {
+    "id": "uuid",
+    "amount": 1000,
+    "status": "PENDING",
+    "created_at": "timestamp"
+  }
+}
+```
+
+同一operation・同一key・同一Requestの再送時は、保存済みResponseをHTTP 200で返し、別Paymentを作成しない。
+
+#### `mock-payment-success`
+
+Request:
+
+```json
+{
+  "payment_id": "uuid",
+  "idempotency_key": "client-generated-key"
+}
+```
+
+`payment_id`はUUIDとし、canonical lowercase UUIDへ正規化する。`idempotency_key`は1〜200文字とし、trim後に空文字となる値および前後に空白を含む値は拒否する。unknown fieldは禁止する。`amount`、`status`、`paid_at`、`user_id`などはクライアントから指定できない。
+
+サーバーはJWTから`auth.uid()`を取得し、`id`と`user_id = auth.uid()`でPaymentを取得する。Payment行をFOR UPDATEでロックし、Paymentが存在しなければ`payment_not_found`、PENDING以外なら`payment_not_pending`とする。PENDINGの場合のみSUCCESSへ遷移させ、`paid_at`を`clock_timestamp()`で設定する。`id`、`user_id`、`amount`は変更しない。Payment更新とidempotency record保存は同一transactionで処理する。
+
+ResponseはHTTP 200とする。
+
+```json
+{
+  "payment": {
+    "id": "uuid",
+    "amount": 1000,
+    "status": "SUCCESS",
+    "paid_at": "timestamp"
+  }
+}
+```
+
+#### `mock-payment-failure`
+
+Request:
+
+```json
+{
+  "payment_id": "uuid",
+  "idempotency_key": "client-generated-key"
+}
+```
+
+認証、入力検証、所有者確認、ロック、冪等性の扱いは`mock-payment-success`と同じとする。PENDINGの場合のみFAILEDへ遷移させ、`paid_at`はNULLとする。
+
+ResponseはHTTP 200とする。
+
+```json
+{
+  "payment": {
+    "id": "uuid",
+    "amount": 1000,
+    "status": "FAILED",
+    "paid_at": null
+  }
+}
+```
+
+#### idempotency
+
+次の3 operationを分離する。
+
+```text
+mock-payment-create
+mock-payment-success
+mock-payment-failure
+```
+
+`idempotency_keys`の`(user_id, key)`を使用し、次の値を保存する。
+
+- `user_id`: JWTの`auth.uid()`
+- `key`: Requestのidempotency key
+- `operation`: 上記operation名
+- `resource_id`: PaymentのID
+- `request_hash`: idempotency keyを除いた正規化Requestのhash
+- `response`: API Response JSON全体
+- `created_at`: DB生成
+- `expires_at`: DB default
+
+`mock-payment-create`の正規化Requestは次のとおりとする。
+
+```json
+{
+  "amount": 1000
+}
+```
+
+`mock-payment-success`および`mock-payment-failure`の正規化Requestは次のとおりとする。
+
+```json
+{
+  "payment_id": "canonical-lowercase-uuid"
+}
+```
+
+同じoperation・同じkey・同じRequestの場合は保存済みResponseを返す。同じkeyでRequestが異なる場合、またはoperationが異なる場合はHTTP 409 `idempotency_key_reused`とする。
+
+`expires_at`は24時間後に設定する。ただし、expires_atを過ぎてもidempotency keyは再利用不可とする。期限切れrecordのcleanupは今回実装しない。
+
+#### RPC
+
+DB処理は次のRPCで行う。
+
+```text
+public.mock_payment_create(integer, text) returns jsonb
+public.mock_payment_success(uuid, text) returns jsonb
+public.mock_payment_failure(uuid, text) returns jsonb
+```
+
+引数はそれぞれ`p_amount integer, p_idempotency_key text`、`p_payment_id uuid, p_idempotency_key text`とする。RPC内部の戻り値は次の形式とする。
+
+```json
+{
+  "response": {
+    "payment": {}
+  },
+  "replayed": false
+}
+```
+
+`response`は外部API Response body、`replayed`は初回かidempotency再送かを示す内部情報とする。Edge Functionは`response`のみを外部へ返し、createでは`replayed = false`をHTTP 201、`replayed = true`をHTTP 200に変換する。success/failureは常にHTTP 200とする。
+
+各RPCは`SECURITY DEFINER`、`SET search_path = ''`、`auth.uid()`、READ COMMITTED、`SET LOCAL lock_timeout = '3s'`、ユーザー単位advisory lock、必要なPaymentのSELECT FOR UPDATEを使用する。idempotency確認、Payment操作、Response保存は同一transactionで処理し、失敗時はPayment変更とidempotency recordをrollbackする。EXECUTEはauthenticatedだけに許可し、public、anon、service_roleからは明示的にREVOKEする。
+
+ロック順序は次のとおりとする。
+
+```text
+user advisory lock
+→ idempotency_keys
+→ payments
+```
+
+#### エラーと同時実行
+
+業務エラーはSQLSTATE `P0001`とし、messageには次の安定したerror codeを入れる。
+
+```text
+unauthorized
+payment_not_found
+payment_not_pending
+idempotency_key_reused
+payment_creation_conflict
+invalid_amount
+invalid_idempotency_key
+```
+
+lock timeoutはSQLSTATE `55P03`とし、Edge FunctionでHTTP 503 `temporary_unavailable`へ変換する。
+
+HTTP APIの基本エラーは次のとおりとする。
+
+| 条件 | HTTP | error code |
+|---|---:|---|
+| Authorization不正 | 401 | `unauthorized` |
+| JSON不正 | 400 | `malformed_json` |
+| POST以外 | 405 | `method_not_allowed` |
+| amount不正 | 422 | `invalid_amount` |
+| UUID不正 | 422 | `invalid_uuid` |
+| idempotency key不正 | 422 | `invalid_idempotency_key` |
+| unknown field | 422 | `unknown_field` |
+| Payment不存在・他ユーザー | 404 | `payment_not_found` |
+| 終端状態への遷移 | 409 | `payment_not_pending` |
+| idempotency key再利用 | 409 | `idempotency_key_reused` |
+| Payment作成競合 | 409 | `payment_creation_conflict` |
+| lock timeout | 503 | `temporary_unavailable` |
+| その他 | 500 | `internal_error` |
+
+同一keyのcreateを同時に受けた場合、ユーザー単位advisory lockによりPaymentは1件だけ作成し、後続Requestは保存済みResponseを返す。同一Paymentへのsuccess同時実行、successとfailureの同時実行では、一方だけが状態遷移に成功し、後続Requestは`payment_not_pending`とする。
+
+#### Security
+
+Payment操作では、Paymentの所有者を必ず`id`と`user_id = auth.uid()`で確認する。存在しないPaymentと他ユーザーPaymentは同じ`payment_not_found`として扱う。RLSは変更せず、FlutterにpaymentsのINSERT/UPDATE/DELETE権限やidempotency_keysの権限を追加しない。Flutter、Edge Functionともにservice_roleを使用せず、Authorization headerとユーザーJWTを利用する。
+
+#### Flutter接続
+
+画面の基本フローは次のとおりとする。
+
+```text
+金額選択
+↓
+mock-payment-create
+↓
+PENDING
+↓
+Mock Payment画面
+↓
+支払い成功 / 支払い失敗
+```
+
+成功時は`mock-payment-success`を呼び、SUCCESSになったPaymentの`payment_id`をChallenge作成へ渡す。失敗時は`mock-payment-failure`を呼び、FAILED Paymentは再開せず、新しいPaymentを作成して再試行する。Mock Payment画面では「支払い成功」と「支払い失敗」を選択できる。
+
+Challenge作成時は、Payment操作とは別の新しいidempotency keyを使用し、既存仕様どおり次だけを送信する。
+
+```json
+{
+  "payment_id": "uuid",
+  "task_ids": [],
+  "routine_ids": [],
+  "idempotency_key": "new-key"
+}
+```
+
+Flutterから`user_id`、`status`、`paid_at`、`created_at`、`updated_at`、Payment amountの再指定、`service_role`、`deadline`、`auto_start_at`、`task_name_snapshot`、展開済みRoutine Taskを送信しない。
+
 ## 7. 成功・失敗・ポイント
 
 - [ ] SUCCESS時にQRを利用可能にする。
@@ -620,3 +864,49 @@ lib/
 - **開始前の取り消し**: 仕様書2章に「取り消しは取り消し完了とする」とあるが、対応する状態・遷移の定義がない。現在は WAITING → FAILED を禁止
 - **QRセルの割り当て方式**(v4から継続): 進行中の表示は仮パターンで、読み取れるQRはSUCCESS時に作成される
 - **未作成のもの**: Challenge作成・完了・失効などのサーバー関数、pg_cronのジョブ、`idempotency_keys` の期限切れ削除
+
+## 変更記録 v6(2026-10-06): Mock Payment API仕様の確定
+
+### 変更前
+- Mock Paymentは3つのEdge Function候補名と「モック決済」としての方針のみ定義され、Request/Response、エラー、冪等性、RPC、同時実行の詳細は未定義だった。
+
+### 変更後
+- `mock-payment-create`、`mock-payment-success`、`mock-payment-failure`のRequest/Response、入力検証、HTTP status、error codeを定義した。
+- Payment状態遷移を`PENDING → SUCCESS`または`PENDING → FAILED`に限定し、PENDINGの自動FAILED化、終端状態の再利用・再開を行わないことを定義した。
+- `idempotency_keys`のoperation、resource_id、request_hash、response、期限切れkeyの再利用不可、cleanup非実装を定義した。
+- Edge FunctionからPostgreSQL RPCを呼び出し、`SECURITY DEFINER`、`auth.uid()`、ユーザー単位advisory lock、`SELECT FOR UPDATE`、3秒のlock timeout、同一transaction処理を行う設計を定義した。
+- `create-challenge`へはSUCCESS後の`payment_id`とTask/RoutineのIDだけを渡し、amountやdeadline等をFlutterから送信しないことを定義した。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 6章 支払い・PayPayモック | Mock Payment APIの正式な状態遷移、API契約、冪等性、エラー、Security、Flutter接続を追加 |
+| 10章 データモデル | 既存の`payments`および`idempotency_keys`の利用方法を明確化。スキーマ変更は行わない |
+| 15章 アーキテクチャ責務 | Payment操作をEdge Function→PostgreSQL RPCで処理する責務を明確化 |
+| 17章 Edge Functions | 既存のMock Payment 3 Function候補に正式契約を付与 |
+| 18章 実装順序 | DB RPC・Edge Function・Flutter接続の前提仕様を確定 |
+
+### 変更しないもの
+- 既存migration、DB schema、RLS、grants、`create-challenge`、Flutterコード、Edge Functionコード、package、`.env`、Remote環境は変更しない。
+
+## 変更記録 v7(2026-10-06): start-challenge仕様の確定
+
+### 変更前
+- Challenge開始APIのRequest/Response、冪等性、手動開始と自動開始の共通処理が未確定だった。
+
+### 変更後
+- `start-challenge`は`challenge_id`と`idempotency_key`だけを受け取り、UUIDはcanonical lowercase、keyは1〜200文字とする。
+- 状態遷移は`WAITING → IN_PROGRESS`のみとし、手動開始は`auto_start_at`前でもサーバー時刻で開始する。`IN_PROGRESS`の再要求は既存の`started_at`を保持して現在状態を返す。
+- `SUCCESS`/`FAILED`およびdeadline到達後は開始不可とし、手動開始と自動開始はChallenge行ロックを使う共通DB処理で競合を排除する。
+- idempotency operationは`start-challenge`とし、同一key・同一request hashは保存済みResponseを返し、異なるoperationまたはhashは`idempotency_key_reused`とする。
+- 自動開始は`process-auto-start`が共通の開始処理を実行する。定期実行のRemote設定はpg_cron/pg_net/Vaultの構成確定と承認後に行う。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 3章 開始仕様 | 手動開始、5分後自動開始、deadline、競合制御を明確化 |
+| 13章 Transaction・競合制御 | `challenges`行ロックと`started_at`の一度だけ設定を適用 |
+| 17章 Edge Functions | `start-challenge`と`process-auto-start`の責務を追加 |
+| Flutter | WAITING画面から`start-challenge`を呼び、IN_PROGRESSを表示 |

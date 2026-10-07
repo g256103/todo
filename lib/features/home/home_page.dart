@@ -1,7 +1,13 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../auth/auth_service.dart';
+import '../history/history_repository.dart';
+import '../points/point_repository.dart';
+import 'mock_payment_home_page.dart';
+import '../routines/routine_editor_view.dart';
 import '../tasks/task_name_validator.dart';
 import '../tasks/task_repository.dart';
 
@@ -20,7 +26,7 @@ class TabbedHomePage extends StatefulWidget {
 }
 
 class _TabbedHomePageState extends State<TabbedHomePage> {
-  static const _titles = ['メイン', 'ポイント', '設定', '履歴', '編集'];
+  static const _titles = ['メイン', 'ポイント', '履歴', '編集', '設定'];
   int _selectedIndex = 0;
   late final List<Widget> _pages;
 
@@ -28,11 +34,11 @@ class _TabbedHomePageState extends State<TabbedHomePage> {
   void initState() {
     super.initState();
     _pages = [
-      const _PlaceholderPage(message: '準備中'),
-      const _PlaceholderPage(message: '準備中'),
-      _SettingsPage(authService: widget.authService, session: widget.session),
-      const _PlaceholderPage(message: '準備中'),
+      const MockPaymentHomePage(),
+      const PointsPage(),
+      const HistoryPage(),
       const TaskEditorPage(),
+      _SettingsPage(authService: widget.authService, session: widget.session),
     ];
   }
 
@@ -41,36 +47,44 @@ class _TabbedHomePageState extends State<TabbedHomePage> {
     return Scaffold(
       appBar: AppBar(title: Text(_titles[_selectedIndex])),
       body: IndexedStack(index: _selectedIndex, children: _pages),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) {
-          setState(() {
-            _selectedIndex = index;
-          });
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'メイン',
+      bottomNavigationBar: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: NavigationBar(
+            backgroundColor: Colors.white.withValues(alpha: 0.82),
+            elevation: 0,
+            selectedIndex: _selectedIndex,
+            onDestinationSelected: (index) {
+              setState(() {
+                _selectedIndex = index;
+              });
+            },
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined),
+                selectedIcon: Icon(Icons.home),
+                label: 'メイン',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.stars_outlined),
+                selectedIcon: Icon(Icons.stars),
+                label: 'ポイント',
+              ),
+              NavigationDestination(icon: Icon(Icons.history), label: '履歴'),
+              NavigationDestination(
+                icon: Icon(Icons.edit_outlined),
+                selectedIcon: Icon(Icons.edit),
+                label: '編集',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings),
+                label: '設定',
+              ),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.stars_outlined),
-            selectedIcon: Icon(Icons.stars),
-            label: 'ポイント',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: '設定',
-          ),
-          NavigationDestination(icon: Icon(Icons.history), label: '履歴'),
-          NavigationDestination(
-            icon: Icon(Icons.edit_outlined),
-            selectedIcon: Icon(Icons.edit),
-            label: '編集',
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -86,6 +100,7 @@ class TaskEditorPage extends StatefulWidget {
 }
 
 class _TaskEditorPageState extends State<TaskEditorPage> {
+  bool _showRoutines = false;
   late final TaskRepository _repository;
   List<Task> _tasks = [];
   bool _isLoading = true;
@@ -246,11 +261,49 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_showRoutines) {
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text('タスク')),
+                ButtonSegment(value: true, label: Text('ルーティーン')),
+              ],
+              selected: {_showRoutines},
+              onSelectionChanged: (selection) {
+                setState(() {
+                  _showRoutines = selection.first;
+                });
+              },
+            ),
+          ),
+          const Expanded(child: RoutineEditorView()),
+        ],
+      );
+    }
     return Stack(
       children: [
-        RefreshIndicator(
-          onRefresh: _isRequestInProgress ? _skipRefresh : _loadTasks,
-          child: _buildContent(),
+        Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: false, label: Text('タスク')),
+                  ButtonSegment(value: true, label: Text('ルーティーン')),
+                ],
+                selected: {_showRoutines},
+                onSelectionChanged: (selection) {
+                  setState(() {
+                    _showRoutines = selection.first;
+                  });
+                },
+              ),
+            ),
+            Expanded(child: _buildTaskContent()),
+          ],
         ),
         if (_isRequestInProgress)
           const Positioned(
@@ -259,6 +312,17 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
             right: 0,
             child: LinearProgressIndicator(),
           ),
+      ],
+    );
+  }
+
+  Widget _buildTaskContent() {
+    return Stack(
+      children: [
+        RefreshIndicator(
+          onRefresh: _isRequestInProgress ? _skipRefresh : _loadTasks,
+          child: _buildContent(),
+        ),
       ],
     );
   }
@@ -367,14 +431,397 @@ class _ErrorContent extends StatelessWidget {
   }
 }
 
-class _PlaceholderPage extends StatelessWidget {
-  const _PlaceholderPage({required this.message});
+class PointsPage extends StatefulWidget {
+  const PointsPage({super.key, this.repository});
 
-  final String message;
+  final PointRepository? repository;
+
+  @override
+  State<PointsPage> createState() => _PointsPageState();
+}
+
+class _PointsPageState extends State<PointsPage> {
+  late final PointRepository _repository;
+  int _points = 0;
+  List<PointTransactionItem> _transactions = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _repository = widget.repository ?? PointRepository();
+    _loadPoints();
+  }
+
+  Future<void> _loadPoints() async {
+    try {
+      final points = await _repository.fetchAvailablePoints();
+      final txs = await _repository.fetchTransactions();
+      if (!mounted) return;
+      setState(() {
+        _points = points;
+        _transactions = txs;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Center(child: Text(message));
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadPoints,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+        children: [
+          const Text(
+            'ポイント',
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  Text(
+                    '$_points pt',
+                    style: Theme.of(context).textTheme.displaySmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '教育用途ポイント（有効期限3か月・譲渡不可）',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '現金化条件と進捗',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '7回成功かつ1週間以上の継続で現金化申請が可能です（手数料10%）。',
+                    style: TextStyle(fontSize: 12, color: Colors.black87),
+                  ),
+                  const SizedBox(height: 12),
+                  LinearProgressIndicator(
+                    value: 0.0,
+                    backgroundColor: Colors.grey.shade200,
+                    valueColor: const AlwaysStoppedAnimation(Colors.green),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '0 / 7 回達成',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      Text(
+                        'あと7回',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'ポイント利用・交換',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: const [
+                ListTile(
+                  leading: Icon(Icons.menu_book, color: Colors.indigo),
+                  title: Text('学習教材・書籍と交換'),
+                  subtitle: Text('Phase 2にて提携先ストアで利用可能になります。'),
+                ),
+                Divider(height: 1),
+                ListTile(
+                  leading: Icon(Icons.account_balance, color: Colors.teal),
+                  title: Text('口座へ出金（現金化）'),
+                  subtitle: Text('達成条件を満たすと申請できます。'),
+                ),
+              ],
+            ),
+          ),
+          if (_transactions.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            const Text(
+              'ポイント獲得履歴',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            for (final tx in _transactions)
+              Card(
+                elevation: 0,
+                child: ListTile(
+                  title: Text(tx.type == 'GRANT' ? 'チャレンジ失敗による付与' : tx.type),
+                  subtitle: Text(
+                    tx.expiresAt != null
+                        ? '有効期限: ${tx.expiresAt!.year}/${tx.expiresAt!.month}/${tx.expiresAt!.day}'
+                        : '',
+                  ),
+                  trailing: Text(
+                    '+${tx.amount} pt',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class HistoryPage extends StatefulWidget {
+  const HistoryPage({super.key, this.repository});
+
+  final HistoryRepository? repository;
+
+  @override
+  State<HistoryPage> createState() => _HistoryPageState();
+}
+
+class _HistoryPageState extends State<HistoryPage> {
+  late final HistoryRepository _repository;
+  List<ChallengeHistoryItem> _history = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _repository = widget.repository ?? HistoryRepository();
+    _loadHistory();
+  }
+
+  Future<void> _loadHistory() async {
+    try {
+      final items = await _repository.fetchHistory();
+      if (!mounted) return;
+      setState(() {
+        _history = items;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadHistory,
+      child: _history.isEmpty
+          ? ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+              children: [
+                const Text(
+                  '履歴',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  elevation: 0,
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.history,
+                          size: 48,
+                          color: Colors.grey.shade400,
+                        ),
+                        const SizedBox(height: 8),
+                        const Text('まだチャレンジ履歴がありません。'),
+                        const SizedBox(height: 4),
+                        Text(
+                          'コミット完了後にチャレンジ履歴が表示されます。',
+                          style: TextStyle(
+                            color: Colors.grey.shade600,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+              itemCount: _history.length + 1,
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return const Padding(
+                    padding: EdgeInsets.only(bottom: 16),
+                    child: Text(
+                      '履歴',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  );
+                }
+                final item = _history[index - 1];
+                return _ChallengeHistoryCard(item: item);
+              },
+            ),
+    );
+  }
+}
+
+class _ChallengeHistoryCard extends StatelessWidget {
+  const _ChallengeHistoryCard({required this.item});
+
+  final ChallengeHistoryItem item;
+
+  Color _statusColor() {
+    switch (item.status) {
+      case 'SUCCESS':
+        return Colors.green;
+      case 'FAILED':
+        return Colors.red;
+      case 'IN_PROGRESS':
+        return Colors.blue;
+      default:
+        return Colors.amber;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dateStr =
+        '${item.createdAt.year}/${item.createdAt.month.toString().padLeft(2, '0')}/${item.createdAt.day.toString().padLeft(2, '0')}';
+
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  dateStr,
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _statusColor().withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    item.status,
+                    style: TextStyle(
+                      color: _statusColor(),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '¥${item.amount} コミット',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            if (item.tasks.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Divider(height: 1),
+              const SizedBox(height: 8),
+              for (final task in item.tasks)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      Icon(
+                        task.isCompleted ? Icons.check_circle : Icons.cancel,
+                        size: 16,
+                        color: task.isCompleted ? Colors.green : Colors.red,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          task.taskNameSnapshot,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: task.isCompleted
+                                ? Colors.green.shade800
+                                : Colors.red.shade800,
+                            decoration: task.isCompleted
+                                ? TextDecoration.lineThrough
+                                : null,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }
 
