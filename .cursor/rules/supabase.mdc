@@ -28,7 +28,9 @@ Never run `supabase db push`, `supabase functions deploy`, or remote SQL without
 
 ## Correctness
 - Wrap multi-step state changes in one transaction (a single RPC). Use `SELECT ... FOR UPDATE` on rows whose state you check then change.
-- Locks: find the existing lock order in earlier migrations and follow it. Never invent a different order.
+- Locks: follow spec ch.13 / v5 order — `challenges` → `challenge_tasks` → `qr_codes` → `points` → `point_transactions`. If existing code differs, treat it as a bug and report it.
+- Use READ COMMITTED only (no SERIALIZABLE). Set explicit `lock_timeout` to a few seconds.
+- `amount` is integer yen (no decimals). History reads snapshot columns (`task_name_snapshot`, etc.), not live task names.
 - State machine: enforce legal transitions in the DB (WAITING -> IN_PROGRESS -> SUCCESS/FAILED); SUCCESS is immutable.
 - Idempotency: store key + request fingerprint; same key + same request returns the stored result; same key + different request raises an error.
 - Manual Start and Auto Start must call the same DB function.

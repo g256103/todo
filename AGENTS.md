@@ -48,7 +48,9 @@ Never print secrets (service_role key, DB password, JWTs, OAuth/API/cron secrets
 - Manual Start and Auto Start share ONE DB logic path. Do not duplicate transitions.
 - Task completion: the 4s long-press is UX only. The server validates; never rely on UI timing for security.
 - Idempotency: same key + same request = same result; same key + different request = error.
-- Check the existing lock order in migrations before adding any new locking.
+- Row lock order (spec ch.13 / v5): `challenges` → `challenge_tasks` → `qr_codes` → `points` → `point_transactions`. If existing code differs, treat it as a bug and report it.
+- Undecided (ask user; never invent): QR cell assignment, QR reveal algorithm, final point conversion ratio, monitoring, env separation, rate limiting, token refresh, server-time offset, liquid-charge rendering.
+- UI mock (`docs/mock/code/`): reference for look, copy, spacing, and transitions only. Do not port its code or judgement logic. If mock and spec disagree, report before implementing.
 
 ## Scoped rules and skills
 Flutter/Riverpod rules: `.cursor/rules/flutter.mdc`. Supabase/SQL/Edge rules: `.cursor/rules/supabase.mdc`.

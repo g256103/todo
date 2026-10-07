@@ -6,6 +6,8 @@ alwaysApply: false
 
 # Flutter / Riverpod
 
+State management status: The codebase currently uses StatefulWidget; flutter_riverpod is not yet in pubspec.yaml. Use Riverpod for NEW features and for screens that must change substantially anyway; add the dependency when the first such feature is implemented (user approved). Do NOT mass-migrate existing screens. Match the existing StatefulWidget style elsewhere.
+
 Before writing code: check `pubspec.yaml` for the Riverpod version and whether `riverpod_generator` is used. Follow the EXISTING style in neighboring files. Do not mix generated and hand-written providers in one feature.
 
 ## Riverpod
@@ -22,6 +24,7 @@ Before writing code: check `pubspec.yaml` for the Riverpod version and whether `
 - Flutter Web is a target: avoid `dart:io`; use platform-safe APIs.
 - Do not add a package unless clearly needed; if you do, say why and pick a maintained one.
 - Task-completion long-press (4s) is presentation only. Send the completion request to the server and render the server result.
+- Long-press UX guards: issue idempotency key at hold start, memory only (never persist). Reset progress to 0 immediately on release, cancel, or app background. Only one hold at a time. Block starting a hold when under 5s to deadline (UX only; server time is authoritative). Provide a confirm-dialog alternative for screen readers (same complete-task call).
 
 ## Tests
 - Test providers/notifiers with `ProviderContainer` and `overrides`; fake the repository. Never hit a real Supabase in unit tests.
