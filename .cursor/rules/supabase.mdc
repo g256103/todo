@@ -42,3 +42,4 @@ Never run `supabase db push`, `supabase functions deploy`, or remote SQL without
 
 ## Tests
 - pgTAP tests in `supabase/tests/`: cover happy path, illegal transition, wrong owner, duplicate idempotency key, same key with different request, and RLS denial.
+- DB test fixtures: insert challenges as WAITING and move them through legal transitions (start_challenge etc.). Never insert IN_PROGRESS/SUCCESS/FAILED directly and never disable triggers. When changing a test file, report why and whether any assertion was added/removed.
