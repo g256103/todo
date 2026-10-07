@@ -12,19 +12,19 @@ values
   ('eeeeeeee-1000-4000-8000-000000000402', 'eeeeeeee-0000-0000-0000-000000000402', 1000, 'SUCCESS', now());
 
 insert into public.challenges (
-  id, user_id, payment_id, amount, status, auto_start_at, deadline, started_at, created_at, updated_at
+  id, user_id, payment_id, amount, status, auto_start_at, deadline, created_at, updated_at
 )
 values
   ('dddddddd-2000-4000-8000-000000000401',
    'dddddddd-0000-0000-0000-000000000401',
    'dddddddd-1000-4000-8000-000000000401',
-   1000, 'IN_PROGRESS', now() - interval '10 minutes', now() + interval '1 hour',
-   now() - interval '10 minutes', now() - interval '10 minutes', now() - interval '10 minutes'),
+   1000, 'WAITING', now() - interval '9 minutes', now() + interval '1 hour',
+   now() - interval '10 minutes', now() - interval '10 minutes'),
   ('eeeeeeee-2000-4000-8000-000000000402',
    'eeeeeeee-0000-0000-0000-000000000402',
    'eeeeeeee-1000-4000-8000-000000000402',
-   1000, 'IN_PROGRESS', now() - interval '2 hours', now() - interval '1 hour',
-   now() - interval '2 hours', now() - interval '2 hours', now() - interval '2 hours');
+   1000, 'WAITING', now() - interval '1 hour 59 minutes', now() + interval '5 seconds',
+   now() - interval '2 hours', now() - interval '2 hours');
 
 insert into public.challenge_tasks (
   id, challenge_id, user_id, task_name_snapshot, sort_order, status
@@ -42,6 +42,25 @@ values
    'eeeeeeee-2000-4000-8000-000000000402',
    'eeeeeeee-0000-0000-0000-000000000402',
    'Bob Task 1 (Expired)', 1, 'INCOMPLETE');
+
+select set_config(
+  'request.jwt.claim.sub',
+  'dddddddd-0000-0000-0000-000000000401',
+  true
+);
+select public.start_challenge(
+  'dddddddd-2000-4000-8000-000000000401', 'fixture-005-start-401'
+);
+select set_config(
+  'request.jwt.claim.sub',
+  'eeeeeeee-0000-0000-0000-000000000402',
+  true
+);
+select public.start_challenge(
+  'eeeeeeee-2000-4000-8000-000000000402', 'fixture-005-start-402'
+);
+select pg_sleep(6);
+select set_config('request.jwt.claim.sub', '', true);
 
 -- 未認証は失敗
 select throws_ok(

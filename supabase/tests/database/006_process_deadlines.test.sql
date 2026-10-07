@@ -10,22 +10,36 @@ values
   ('ffffffff-1000-4000-8000-000000000501', 'ffffffff-0000-0000-0000-000000000501', 1500, 'SUCCESS', now());
 
 insert into public.challenges (
-  id, user_id, payment_id, amount, status, auto_start_at, deadline, started_at, created_at, updated_at
+  id, user_id, payment_id, amount, status, auto_start_at, deadline, created_at, updated_at
 )
 values
   ('ffffffff-2000-4000-8000-000000000501',
    'ffffffff-0000-0000-0000-000000000501',
    'ffffffff-1000-4000-8000-000000000501',
-   1500, 'IN_PROGRESS', now() - interval '2 days', now() - interval '1 day',
-   now() - interval '2 days', now() - interval '2 days', now() - interval '2 days');
+   1500, 'WAITING', now() - interval '1 minute', now() + interval '30 seconds',
+   now() - interval '2 minutes', now() - interval '2 minutes');
+
+select set_config(
+  'request.jwt.claim.sub',
+  'ffffffff-0000-0000-0000-000000000501',
+  true
+);
+set local role authenticated;
+select public.start_challenge(
+  'ffffffff-2000-4000-8000-000000000501', 'fixture-006-start'
+);
+select pg_sleep(31);
+reset role;
 
 -- 一般ユーザーは実行不可
+set local role authenticated;
 select throws_ok(
   $$select public.process_deadlines()$$,
   '42501',
   null,
   '一般ロールからは実行不可'
 );
+reset role;
 
 -- service_role で実行
 set local role service_role;
