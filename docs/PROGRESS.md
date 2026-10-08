@@ -52,6 +52,7 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 - 2026-10-08 baseline: dart analyze 0 issues; flutter test 61 passed, 0 failed.
 - supabase test db (local): 9 files; run `supabase db reset` then `supabase test db` (migrations through 20261008103000).
 - Remote: SUCCESS challenges created before 20261007080340 may lack `qr_codes` rows; backfill needs approval (one-off migration or ops), not done in this change.
+- Lock timeout (SQLSTATE `55P03`, PG message e.g. `canceling statement due to lock timeout`): migrations set `lock_timeout` but no RPC maps to `temporary_unavailable`; `_shared.dbErrorCode` uses `message` only → single-RPC Edges (complete-task, use-qr, mock-payment-*, start/create-challenge) likely HTTP 500. Spec ch. Mock Payment: 503 `temporary_unavailable`. Cron edges map any RPC error to 503. Cross-cutting fix needs approval.
 
 ## Remote state (update only after user confirms)
 - Last applied remote migration: spec v5 says 0001–0007 applied; 0008+ unconfirmed
