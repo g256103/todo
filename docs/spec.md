@@ -518,6 +518,7 @@ lib/
 - [ ] create-challenge
 - [ ] start-challenge
 - [ ] complete-task（レスポンスにresult種別：completed／challenge_success／already_completed／deadline_exceeded／invalid_stateを含める）
+  - complete-task: 業務上の結果は HTTP 200 の result で返す(completed / challenge_success / already_completed / deadline_exceeded / invalid_state)。invalid_state は challenge が IN_PROGRESS でない場合(未開始・SUCCESS 済み・FAILED 済み)。認証・入力不正・対象なし・冪等キー不整合・競合・一時障害は error_code + 4xx/5xx。
 - [ ] process-auto-start
 - [ ] process-deadlines
 - [ ] use-qr
@@ -910,3 +911,18 @@ lib/
 | 13章 Transaction・競合制御 | `challenges`行ロックと`started_at`の一度だけ設定を適用 |
 | 17章 Edge Functions | `start-challenge`と`process-auto-start`の責務を追加 |
 | Flutter | WAITING画面から`start-challenge`を呼び、IN_PROGRESSを表示 |
+
+## 変更記録 v8(2026-10-08): complete-task HTTP契約の明文化
+
+### 変更前
+- 17章の`complete-task`はresult種別を含める旨のみで、業務上の成功・ソフト拒否と認証・入力・競合等のエラーをHTTP statusとJSONでどう切り分けるかが本文に未記載だった。
+
+### 変更後
+- 業務上の結果は HTTP 200 の`result`（`completed` / `challenge_success` / `already_completed` / `deadline_exceeded` / `invalid_state`）で返す。`invalid_state`は challenge が IN_PROGRESS でない場合（未開始・SUCCESS 済み・FAILED 済み）。認証・入力不正・対象なし・冪等キー不整合・競合・一時障害は`error_code`と 4xx/5xx で返す。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 17章 Edge Functions | `complete-task`のHTTP 200`result`と`error_code`+4xx/5xxの切り分けを明文化 |
+| Flutter / Edge Function | 既存実装（決定D）の契約を仕様本文に反映。付録A⑩のresult種別一覧は変更なし |
