@@ -2,8 +2,8 @@
 
 Keep this file under ~80 lines. Code and docs/spec.md win over this file if they disagree.
 
-- Last updated: 2026-10-08 (settings + points)
-- Verified at commit: `5e984d3` on `feat/settings-and-points` — `dart analyze` 0; `flutter test` 69; `supabase test db` 12/218 PASS; **remote** Web point purchase smoke OK (2026-10-08)
+- Last updated: 2026-10-08 (RLS layer-unit tests)
+- Verified at commit: local — `supabase test db` 13/325 PASS (incl. pgTAP `013_rls_matrix` 107: +WITH CHECK / +DELETE-policy layer units); prior `5e984d3` — `dart analyze` 0; `flutter test` 69; **remote** Web point purchase smoke OK (2026-10-08)
 
 ## Features (status: DONE / PARTIAL / TODO / UNKNOWN)
 | Feature | Status | Where (key files) | Notes |
