@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(20);
+select plan(24);
 
 insert into auth.users (id, raw_user_meta_data) values
   ('dddddddd-0000-0000-0000-000000000401', '{"full_name":"Complete Alice"}'),
@@ -94,6 +94,36 @@ select is(
     where id = 'dddddddd-2000-4000-8000-000000000401'),
   'SUCCESS',
   '全タスク完了でチャレンジが SUCCESS'
+);
+
+select isnt(
+  (select refunded_at from public.challenges
+    where id = 'dddddddd-2000-4000-8000-000000000401'),
+  null,
+  'SUCCESS 時に refunded_at が設定される'
+);
+
+select is(
+  (select public.complete_task(
+    'dddddddd-3000-4000-8000-000000000402', 'complete-008-2'
+  )->>'refunded'),
+  'true',
+  'challenge_success レスポンスに refunded: true'
+);
+
+select is(
+  (select public.complete_task(
+    'dddddddd-3000-4000-8000-000000000402', 'complete-008-2'
+  )->>'refund_amount'),
+  '1000',
+  'refund_amount は challenges.amount と同額'
+);
+
+select ok(
+  not (select public.complete_task(
+    'dddddddd-3000-4000-8000-000000000401', 'complete-008-1'
+  ) ? 'refunded'),
+  'completed レスポンスに refunded は含めない'
 );
 
 select is(

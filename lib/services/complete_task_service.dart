@@ -42,6 +42,8 @@ class CompleteTaskResponse {
     this.task,
     this.challengeStatus,
     this.invalidStateErrorCode,
+    this.refunded,
+    this.refundAmount,
   });
 
   factory CompleteTaskResponse.fromJson(Object? data) {
@@ -73,10 +75,21 @@ class CompleteTaskResponse {
       throw const FormatException('Invalid complete response.');
     }
 
+    final refunded = json['refunded'];
+    final refundAmountRaw = json['refund_amount'];
+    int? refundAmount;
+    if (refundAmountRaw is int) {
+      refundAmount = refundAmountRaw;
+    } else if (refundAmountRaw is num) {
+      refundAmount = refundAmountRaw.toInt();
+    }
+
     return CompleteTaskResponse(
       result: result,
       task: CompletedChallengeTask.fromJson(taskData),
       challengeStatus: challengeStatus,
+      refunded: refunded is bool ? refunded : null,
+      refundAmount: refundAmount,
     );
   }
 
@@ -85,6 +98,8 @@ class CompleteTaskResponse {
   final CompletedChallengeTask? task;
   final String? challengeStatus;
   final String? invalidStateErrorCode;
+  final bool? refunded;
+  final int? refundAmount;
 
   bool get isSuccess =>
       result == 'completed' ||

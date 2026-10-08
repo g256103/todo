@@ -945,3 +945,21 @@ lib/
 | 7章・10章・12章・13章 | 返金のデータとトランザクション境界を定義 |
 | 17章・UC17 | complete-taskレスポンスとUC17の処理主体を明確化 |
 | DB / Flutter | 新migration・RPC変更・pgTAP・Flutterは未実装（別タスク） |
+
+## 変更記録 v10(2026-10-08): 期限切れ未開始 WAITING と新規作成（決定L・案c）
+
+### 変更前
+- v5③により `WAITING` / `IN_PROGRESS` はユーザーごとに1件まで。期限切れかつ未開始の `WAITING` は `process_auto_start` / `start_challenge` で救済されず、`challenges_one_active_per_user` により新規作成もブロックされていた。
+
+### 変更後
+- **作成時の「アクティブ」判定**: `IN_PROGRESS` は常にブロック。`WAITING` は `deadline > clock_timestamp()` のときのみブロック（`create_challenge` RPC）。
+- **一意制約**: ユーザーごとに `IN_PROGRESS` は1件まで（部分ユニークインデックス）。期限切れ `WAITING` は複数残ってもよい（ゾンビ行）。
+- **12章は維持**: `WAITING` → `FAILED` の直接遷移は禁止。期限切れ未開始 `WAITING` は自動で `FAILED` にしない（決定Aの `process_deadlines` は `IN_PROGRESS` のみ）。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 2章・v5③ | 新規作成の制限は「進行中または期限内未開始」のみ |
+| 10章・DB | `challenges_one_active_per_user` を `challenges_one_in_progress_per_user` に置換 |
+| 12章 | 遷移図は変更なし（`WAITING` → `FAILED` 禁止を維持） |

@@ -33,8 +33,7 @@ export async function handleRequest(
     return response({ error_code: "method_not_allowed" }, 405, request);
   }
 
-  const cronSecret =
-    Deno.env.get("DEADLINES_CRON_SECRET") ??
+  const cronSecret = Deno.env.get("DEADLINES_CRON_SECRET") ??
     Deno.env.get("AUTO_START_CRON_SECRET");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (

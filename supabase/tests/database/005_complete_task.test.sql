@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(12);
+select plan(17);
 
 insert into auth.users (id, raw_user_meta_data) values
   ('dddddddd-0000-0000-0000-000000000401', '{"full_name":"Complete Alice"}'),
@@ -90,11 +90,19 @@ select throws_ok(
 );
 
 -- 1件目のタスク完了
-select lives_ok(
-  $$select public.complete_task(
+select is(
+  (select public.complete_task(
     'dddddddd-3000-4000-8000-000000000401', 'complete-401-1'
-  )$$,
+  )->>'result'),
+  'completed',
   'Alice Task 1 を完了できる'
+);
+
+select ok(
+  not (select public.complete_task(
+    'dddddddd-3000-4000-8000-000000000401', 'complete-401-1'
+  ) ? 'refunded'),
+  '途中完了のレスポンスに refunded は含めない'
 );
 
 select is(
@@ -129,12 +137,28 @@ select is(
   '別キーでも完了済みタスクはalready_completedを返す'
 );
 
--- 2件目（最後）のタスク完了 -> チャレンジがSUCCESSに自動遷移
-select lives_ok(
-  $$select public.complete_task(
+select is(
+  (select public.complete_task(
     'dddddddd-3000-4000-8000-000000000402', 'complete-401-2'
-  )$$,
-  'Alice Task 2 を完了できる'
+  )->>'result'),
+  'challenge_success',
+  '最終タスク完了は challenge_success を返す'
+);
+
+select is(
+  (select public.complete_task(
+    'dddddddd-3000-4000-8000-000000000402', 'complete-401-2'
+  )->>'refunded'),
+  'true',
+  'challenge_success に refunded: true'
+);
+
+select is(
+  (select public.complete_task(
+    'dddddddd-3000-4000-8000-000000000402', 'complete-401-2'
+  )->>'refund_amount'),
+  '1000',
+  'refund_amount は challenges.amount と同額'
 );
 
 select is(
@@ -149,6 +173,20 @@ select isnt(
     where id = 'dddddddd-2000-4000-8000-000000000401'),
   null,
   'finished_atが設定される'
+);
+
+select isnt(
+  (select refunded_at from public.challenges
+    where id = 'dddddddd-2000-4000-8000-000000000401'),
+  null,
+  'SUCCESS 時に refunded_at が設定される'
+);
+
+select is(
+  (select status from public.payments
+    where id = 'dddddddd-1000-4000-8000-000000000401'),
+  'SUCCESS',
+  'モック返金後も payments.status は SUCCESS を維持'
 );
 
 -- Bob として認証して期限切れチャレンジのタスク完了

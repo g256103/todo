@@ -66,10 +66,11 @@ void main() {
     final invoker = _FakeInvoker(
       MockPaymentFunctionResponse(
         statusCode: 200,
-        data: _response(
-          result: 'challenge_success',
-          challengeStatus: 'SUCCESS',
-        ),
+        data: {
+          ..._response(result: 'challenge_success', challengeStatus: 'SUCCESS'),
+          'refunded': true,
+          'refund_amount': 1000,
+        },
       ),
     );
     final service = CompleteTaskService(
@@ -82,6 +83,8 @@ void main() {
 
     expect(res.result, 'challenge_success');
     expect(res.challengeStatus, 'SUCCESS');
+    expect(res.refunded, isTrue);
+    expect(res.refundAmount, 1000);
   });
 
   test(

@@ -27,7 +27,8 @@ Deno.test("process-deadlines validates authorization and method", async () => {
     throw new Error("GET method");
   }
   if (
-    (await handleRequest(request({ authorization: "Bearer invalid" }))).status !== 401
+    (await handleRequest(request({ authorization: "Bearer invalid" })))
+      .status !== 401
   ) {
     throw new Error("unauthorized");
   }

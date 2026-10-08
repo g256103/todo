@@ -372,6 +372,13 @@ authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
 allow_dynamic_registration = false
 
+# Cron edges authenticate with AUTO_START_CRON_SECRET in the handler, not user JWT.
+[functions.process-auto-start]
+verify_jwt = false
+
+[functions.process-deadlines]
+verify_jwt = false
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.
