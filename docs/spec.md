@@ -105,10 +105,255 @@
 - [ ] PaymentとChallengeは別エンティティで管理する。
 - [ ] 将来、本物の決済サービスへ差し替えやすい構造にする。
 
+### 6.1 Mock Payment API（確定仕様）
+
+Mock Paymentは認証済みユーザー専用のサーバー処理とし、Flutterから`payments`へ直接INSERT/UPDATEしない。FlutterはEdge Functionを呼び出し、Edge FunctionはPostgreSQL RPCを経由してPaymentを操作する。本番決済API、実際のQR決済、`service_role`を処理主体として使用しない。
+
+Paymentの状態遷移は次の2つだけを許可する。
+
+```text
+PENDING → SUCCESS
+PENDING → FAILED
+```
+
+`SUCCESS`と`FAILED`は終端状態とする。PENDING Paymentは自動FAILEDにしない。PENDINGまたはFAILEDのPaymentが存在していても、新しいidempotency keyによる新規Payment作成を許可する。FAILED Paymentは再利用・再開せず、再試行時は新しいPaymentを作成する。
+
+#### `mock-payment-create`
+
+Request:
+
+```json
+{
+  "amount": 1000,
+  "idempotency_key": "client-generated-key"
+}
+```
+
+入力はJSON objectとする。`amount`はfiniteなnumberで、`Number.isInteger()`を満たし、100以上5000以下かつ100円単位でなければならない。`"1000"`のような文字列は拒否する。JSON parse後に整数値となる`1000.0`および`1e3`は許可する。
+
+`idempotency_key`は1〜200文字とし、trim後に空文字となる値および前後に空白を含む値は拒否する。unknown fieldは禁止する。`user_id`、`status`、`paid_at`、`created_at`、`updated_at`などのサーバー管理項目はクライアントから指定できない。
+
+サーバーはJWTから`auth.uid()`を取得し、PaymentをPENDINGで作成する。`id`はDBが生成し、`user_id`は`auth.uid()`、`paid_at`はNULL、timestampsはDBが生成する。Payment作成とidempotency record保存は同一transactionで処理する。
+
+初回のResponseはHTTP 201とする。
+
+```json
+{
+  "payment": {
+    "id": "uuid",
+    "amount": 1000,
+    "status": "PENDING",
+    "created_at": "timestamp"
+  }
+}
+```
+
+同一operation・同一key・同一Requestの再送時は、保存済みResponseをHTTP 200で返し、別Paymentを作成しない。
+
+#### `mock-payment-success`
+
+Request:
+
+```json
+{
+  "payment_id": "uuid",
+  "idempotency_key": "client-generated-key"
+}
+```
+
+`payment_id`はUUIDとし、canonical lowercase UUIDへ正規化する。`idempotency_key`は1〜200文字とし、trim後に空文字となる値および前後に空白を含む値は拒否する。unknown fieldは禁止する。`amount`、`status`、`paid_at`、`user_id`などはクライアントから指定できない。
+
+サーバーはJWTから`auth.uid()`を取得し、`id`と`user_id = auth.uid()`でPaymentを取得する。Payment行をFOR UPDATEでロックし、Paymentが存在しなければ`payment_not_found`、PENDING以外なら`payment_not_pending`とする。PENDINGの場合のみSUCCESSへ遷移させ、`paid_at`を`clock_timestamp()`で設定する。`id`、`user_id`、`amount`は変更しない。Payment更新とidempotency record保存は同一transactionで処理する。
+
+ResponseはHTTP 200とする。
+
+```json
+{
+  "payment": {
+    "id": "uuid",
+    "amount": 1000,
+    "status": "SUCCESS",
+    "paid_at": "timestamp"
+  }
+}
+```
+
+#### `mock-payment-failure`
+
+Request:
+
+```json
+{
+  "payment_id": "uuid",
+  "idempotency_key": "client-generated-key"
+}
+```
+
+認証、入力検証、所有者確認、ロック、冪等性の扱いは`mock-payment-success`と同じとする。PENDINGの場合のみFAILEDへ遷移させ、`paid_at`はNULLとする。
+
+ResponseはHTTP 200とする。
+
+```json
+{
+  "payment": {
+    "id": "uuid",
+    "amount": 1000,
+    "status": "FAILED",
+    "paid_at": null
+  }
+}
+```
+
+#### idempotency
+
+次の3 operationを分離する。
+
+```text
+mock-payment-create
+mock-payment-success
+mock-payment-failure
+```
+
+`idempotency_keys`の`(user_id, key)`を使用し、次の値を保存する。
+
+- `user_id`: JWTの`auth.uid()`
+- `key`: Requestのidempotency key
+- `operation`: 上記operation名
+- `resource_id`: PaymentのID
+- `request_hash`: idempotency keyを除いた正規化Requestのhash
+- `response`: API Response JSON全体
+- `created_at`: DB生成
+- `expires_at`: DB default
+
+`mock-payment-create`の正規化Requestは次のとおりとする。
+
+```json
+{
+  "amount": 1000
+}
+```
+
+`mock-payment-success`および`mock-payment-failure`の正規化Requestは次のとおりとする。
+
+```json
+{
+  "payment_id": "canonical-lowercase-uuid"
+}
+```
+
+同じoperation・同じkey・同じRequestの場合は保存済みResponseを返す。同じkeyでRequestが異なる場合、またはoperationが異なる場合はHTTP 409 `idempotency_key_reused`とする。
+
+`expires_at`は24時間後に設定する。ただし、expires_atを過ぎてもidempotency keyは再利用不可とする。期限切れrecordのcleanupは今回実装しない。
+
+#### RPC
+
+DB処理は次のRPCで行う。
+
+```text
+public.mock_payment_create(integer, text) returns jsonb
+public.mock_payment_success(uuid, text) returns jsonb
+public.mock_payment_failure(uuid, text) returns jsonb
+```
+
+引数はそれぞれ`p_amount integer, p_idempotency_key text`、`p_payment_id uuid, p_idempotency_key text`とする。RPC内部の戻り値は次の形式とする。
+
+```json
+{
+  "response": {
+    "payment": {}
+  },
+  "replayed": false
+}
+```
+
+`response`は外部API Response body、`replayed`は初回かidempotency再送かを示す内部情報とする。Edge Functionは`response`のみを外部へ返し、createでは`replayed = false`をHTTP 201、`replayed = true`をHTTP 200に変換する。success/failureは常にHTTP 200とする。
+
+各RPCは`SECURITY DEFINER`、`SET search_path = ''`、`auth.uid()`、READ COMMITTED、`SET LOCAL lock_timeout = '3s'`、ユーザー単位advisory lock、必要なPaymentのSELECT FOR UPDATEを使用する。idempotency確認、Payment操作、Response保存は同一transactionで処理し、失敗時はPayment変更とidempotency recordをrollbackする。EXECUTEはauthenticatedだけに許可し、public、anon、service_roleからは明示的にREVOKEする。
+
+ロック順序は次のとおりとする。
+
+```text
+user advisory lock
+→ idempotency_keys
+→ payments
+```
+
+#### エラーと同時実行
+
+業務エラーはSQLSTATE `P0001`とし、messageには次の安定したerror codeを入れる。
+
+```text
+unauthorized
+payment_not_found
+payment_not_pending
+idempotency_key_reused
+payment_creation_conflict
+invalid_amount
+invalid_idempotency_key
+```
+
+lock timeoutはSQLSTATE `55P03`とし、Edge FunctionでHTTP 503 `temporary_unavailable`へ変換する。
+
+HTTP APIの基本エラーは次のとおりとする。
+
+| 条件 | HTTP | error code |
+|---|---:|---|
+| Authorization不正 | 401 | `unauthorized` |
+| JSON不正 | 400 | `malformed_json` |
+| POST以外 | 405 | `method_not_allowed` |
+| amount不正 | 422 | `invalid_amount` |
+| UUID不正 | 422 | `invalid_uuid` |
+| idempotency key不正 | 422 | `invalid_idempotency_key` |
+| unknown field | 422 | `unknown_field` |
+| Payment不存在・他ユーザー | 404 | `payment_not_found` |
+| 終端状態への遷移 | 409 | `payment_not_pending` |
+| idempotency key再利用 | 409 | `idempotency_key_reused` |
+| Payment作成競合 | 409 | `payment_creation_conflict` |
+| lock timeout | 503 | `temporary_unavailable` |
+| その他 | 500 | `internal_error` |
+
+同一keyのcreateを同時に受けた場合、ユーザー単位advisory lockによりPaymentは1件だけ作成し、後続Requestは保存済みResponseを返す。同一Paymentへのsuccess同時実行、successとfailureの同時実行では、一方だけが状態遷移に成功し、後続Requestは`payment_not_pending`とする。
+
+#### Security
+
+Payment操作では、Paymentの所有者を必ず`id`と`user_id = auth.uid()`で確認する。存在しないPaymentと他ユーザーPaymentは同じ`payment_not_found`として扱う。RLSは変更せず、FlutterにpaymentsのINSERT/UPDATE/DELETE権限やidempotency_keysの権限を追加しない。Flutter、Edge Functionともにservice_roleを使用せず、Authorization headerとユーザーJWTを利用する。
+
+#### Flutter接続
+
+画面の基本フローは次のとおりとする。
+
+```text
+金額選択
+↓
+mock-payment-create
+↓
+PENDING
+↓
+Mock Payment画面
+↓
+支払い成功 / 支払い失敗
+```
+
+成功時は`mock-payment-success`を呼び、SUCCESSになったPaymentの`payment_id`をChallenge作成へ渡す。失敗時は`mock-payment-failure`を呼び、FAILED Paymentは再開せず、新しいPaymentを作成して再試行する。Mock Payment画面では「支払い成功」と「支払い失敗」を選択できる。
+
+Challenge作成時は、Payment操作とは別の新しいidempotency keyを使用し、既存仕様どおり次だけを送信する。
+
+```json
+{
+  "payment_id": "uuid",
+  "task_ids": [],
+  "routine_ids": [],
+  "idempotency_key": "new-key"
+}
+```
+
+Flutterから`user_id`、`status`、`paid_at`、`created_at`、`updated_at`、Payment amountの再指定、`service_role`、`deadline`、`auto_start_at`、`task_name_snapshot`、展開済みRoutine Taskを送信しない。
+
 ## 7. 成功・失敗・ポイント
 
 - [ ] SUCCESS時にQRを利用可能にする。
-- [ ] SUCCESS時はチャレンジ金額を返金する。返金も今回はモック。
+- [ ] SUCCESS時はチャレンジ金額（`challenges.amount`、全額）をモック返金する。`payments.status`はコミット時の`SUCCESS`を維持し、返金は`challenges.refunded_at`で記録する（ポイント台帳には載せない）。
+- [ ] モック返金は`complete_task` RPC内で、初回のチャレンジ`SUCCESS`遷移と`qr_codes`作成と同一トランザクションで行う。別のMock Payment Edge Functionは追加しない。
 - [ ] 期限到達時に未完了ならFAILED。
 - [ ] FAILED時、返金されなかった金額を教育用途ポイントとして付与する。
 - [ ] ポイント用途は書籍・学習・資格教材等。
@@ -119,15 +364,70 @@
 - [ ] ポイント画面では保有ポイントと進捗を表示する。
 - [ ] 進捗表示として「n pt」「4/7」「あと3日」等を使用する。
 
-## 8. QR仕様（v2で更新）
+## 8. QR仕様（v2で更新、v11でセル割当・revealを確定）
 
 - [ ] 成功後にQRを利用可能にする。
 - [ ] 実際のカメラでQRを読み取れるようにする。
-- [ ] QRにはランダムなtoken等を持たせ、サーバーで検証する。トークン生成にはcrypto.randomUUID()等、暗号学的に安全な乱数を使用する。
+- [ ] QRにはランダムなtoken等を持たせ、サーバーで検証する。トークン生成にはcrypto.randomUUID()等、暗号学的に安全な乱数を使用する（DB既定は`qr_codes.token`）。
 - [ ] QRはAVAILABLEから一度利用するとUSED。
 - [ ] 同じQRの二重利用を防止する。
-- [ ] SUCCESS前は利用不可。
+- [ ] SUCCESS前は利用不可（`use_qr`は`qr_codes`行とChallengeがSUCCESSであることを要求する）。
 - [ ] QR利用時はサーバーでChallenge状態とQR状態を確認する。
+
+### 8.1 二段構え（決定E・案A）
+
+v5①（トークンはSUCCESS時のみDB作成）とv4（タスク完了ごとのセル開放演出）を両立する。
+
+| フェーズ | 画面 | 内容 |
+|---|---|---|
+| `IN_PROGRESS` | チャレンジ実行画面（上部の統合QRエリア） | **プレビュー演出のみ**。読取・`use_qr`不可。 |
+| `SUCCESS`以降 | 成功画面（または同等の成功モーダル） | **本物のtoken**で生成したQR。カメラ読取・`use_qr`可。 |
+
+- 進行中プレビューと完成QRの**モジュール配置のピクセル一致は要求しない**。SUCCESS遷移時に本物QRへ差し替え、別演出（8.4）で達成感を出す。
+- 長押し4秒中はQRを変化させない（v4・4章）。
+
+### 8.2 プレビュー用ペイロード（IN_PROGRESS）
+
+- 本token・`qr_codes`行をクライアントに渡さない。
+- プレビューQRの符号化内容は次の固定形式とする（`challenge_id`はcanonical lowercase UUID）:
+  - `https://paypay-commit.mock/preview?challenge_id={challenge_id}`
+- 誤読・誤用防止: プレビューURLは`use_qr`で検証されない（本番claim URLとパスを分ける）。ECCは**レベルM**（モック `docs/mock/code/src/utils/qrUtils.ts` と同じ）。
+
+### 8.3 セル割当（タスク→QRモジュール）
+
+`challenge_tasks`を`sort_order`昇順に並べたインデックス`0 … n-1`を**タスク番号**とする。割当はプレビューQRの黒モジュールに対して行う（規範アルゴリズムはモック `qrUtils.ts` の`generateQRModel`と同等）。
+
+1. プレビューQRの全黒モジュールを列挙する。
+2. **位置検出パターン**（各コーナー7×7、モジュール座標がfinderに入るもの）を除いた黒モジュールを、決定的PRNG（Mulberry32、**seed = `20261004`固定**）でシャッフルする。
+3. シャッフル後の非finderモジュールを、先頭から**タスク番号へラウンドロビン**（`idx % n`）で割り当てる。
+4. **finderモジュールはすべて最終タスク**（タスク番号`n-1`）に割り当てる。
+5. 各タスク内の開放順序: 非finderを先、finderを後（同一タスク内でfinderは最後に開く）。
+
+タスク数が黒モジュール数より多い場合は、割当ゼロのタスクがあり得る（開放アニメーション0件）。タスク数が1のときはfinderも非finderもその1タスクに属する。
+
+### 8.4 Revealアニメーション（IN_PROGRESS）
+
+`complete-task`がHTTP 200かつ`result`が`completed`または`challenge_success`で当該タスクが`COMPLETED`になった**後**に、そのタスクに割り当てたセルを開く。
+
+- 1タスクあたりの開放時間の目安: **約800ms**（割当セル数で等分割、1ステップ最低約6ms）。
+- 各セル開放時: 約120msの薄緑ハイライト後、黒（`#1C1C1E`）で表示。未開放セルは薄いグレー点（不透明度おおよそ8%）。
+- **最終タスク**の割当セルをすべて開いた直後: QR全体の軽い光り演出**1回・約400ms**。
+- 既に`COMPLETED`のタスクは、画面再表示時に割当セルを即時表示済みとする（アニメーションは今回承認されたタスクのみ）。
+
+`result`が`challenge_success`のとき: 上記の最終タスク開放・光り演出の後、**成功画面へ遷移**し8.5を表示する（プレビューエリアを本物QRに差し替え）。
+
+### 8.5 本物QR（SUCCESS以降）
+
+- `qr_codes.token`は`complete_task`のSUCCESSトランザクションで作成済み（v5①・7章）。クライアントは`challenge_success`後に**RLSで本人の`qr_codes`をSELECT**するか、将来のAPI拡張でtokenを受け取る（いずれもSUCCESS後のみ）。
+- 符号化ペイロード（モック準拠）:
+  - `https://paypay-commit.mock/claim?token={token}&amount={amount}&status=VERIFIED`
+  - `amount`は`challenges.amount`（整数円）。`token`はURLエンコードする。
+- 静寂域（quiet zone）を確保し、実機カメラで読み取れること（モック `SuccessView.tsx` と同程度のmargin）。
+- 成功画面の演出: **4×4タイルのパズル組み立て**、または同等の短い組み立てアニメーション（モック `SuccessView.tsx` を参考）。その後「QR利用」等で`use-qr`を呼ぶ。
+
+### 8.6 実装メモ（Flutter・別タスク）
+
+チャレンジ実行画面にプレビューQR（8.2〜8.4、`docs/mock/code`の`RevealingQR`/`qrUtils`をUI参照のみで移植）。`complete_task`成功で当該タスクのrevealをトリガー。`challenge_success`後に`qr_codes`からtokenを取得し成功画面で8.5のclaim QRを描画。カメラ読取と`use-qr` EdgeはSUCCESSかつAVAILABLEのみ。DB migration・RPC変更は本決定では不要（token返却をレスポンスに含める拡張は任意）。
 
 ## 9. UI・画面（v2で更新）
 
@@ -136,6 +436,7 @@
 - [ ] 編集：タスク／ルーティーンを管理。左で編集・削除、右で登録する方針。
 - [ ] ルーティーン長押しで含まれるタスクを確認。
 - [ ] チャレンジ中：完了タスクを緑、未完了タスクを白。
+- [ ] チャレンジ中（IN_PROGRESS）：画面上部にプレビューQRを表示し、タスク完了承認後に8章のrevealでセルを開放する（読取不可）。
 - [ ] チャレンジ中のタスク完了操作は4秒長押し。長押し中はバッテリーが充電されるように満ちていくアニメーションを表示する（単色＋満タン時のみ軽い光の演出。CustomPainterで描画）。
 - [ ] 支援機能（スクリーンリーダー等）利用時は、長押しUIと並行して確認ダイアログによる代替完了操作を提供する。
 - [ ] 履歴：日付・チャレンジ額・結果。長押しで詳細。
@@ -163,7 +464,7 @@ routine_id FK / task_id FK / PK=(routine_id, task_id) / 多対多
 id PK / user_id FK / amount（integer、円単位・小数点なし） / status / created_at / paid_at / PENDING/SUCCESS/FAILED
 
 **challenges**
-id PK / user_id FK / payment_id FK / amount（integer） / status / created_at / auto_start_at / started_at / deadline / finished_at / WAITING/IN_PROGRESS/SUCCESS/FAILED
+id PK / user_id FK / payment_id FK / amount（integer） / status / created_at / auto_start_at / started_at / deadline / finished_at / refunded_at（timestamptz、モック返金確定時刻） / WAITING/IN_PROGRESS/SUCCESS/FAILED。`status = 'SUCCESS'`のときのみ`refunded_at`はNOT NULL（`FAILED`等ではNULL）。
 
 **challenge_tasks**
 id PK / challenge_id FK / task_id FK / task_name_snapshot / status / completed_at / created_at / INCOMPLETE/COMPLETED
@@ -215,7 +516,7 @@ key / user_id / operation / resource_id / created_at / 重要操作の二重実�
 
 - [ ] Challenge作成＋challenge_tasks作成を1トランザクション。
 - [ ] Task完了＋全タスク確認＋SUCCESS化を1トランザクション。
-- [ ] SUCCESS＋QR AVAILABLE化を一体で確定。
+- [ ] SUCCESS＋モック返金（`refunded_at`設定）＋QR AVAILABLE化を一体で確定。
 - [ ] FAILED＋ポイント付与を1トランザクション。
 - [ ] ポイント交換を1トランザクション。
 - [ ] 現金化を1トランザクション。
@@ -274,6 +575,8 @@ lib/
 - [ ] create-challenge
 - [ ] start-challenge
 - [ ] complete-task（レスポンスにresult種別：completed／challenge_success／already_completed／deadline_exceeded／invalid_stateを含める）
+  - complete-task: 業務上の結果は HTTP 200 の result で返す(completed / challenge_success / already_completed / deadline_exceeded / invalid_state)。invalid_state は challenge が IN_PROGRESS でない場合(未開始・SUCCESS 済み・FAILED 済み)。認証・入力不正・対象なし・冪等キー不整合・競合・一時障害は error_code + 4xx/5xx。
+  - `result = challenge_success`のとき、RPCレスポンス（Edgeはそのまま返す）に`refunded: true`と`refund_amount`（integer、円、`challenges.amount`と同値）を含める。それ以外の result では含めない。
 - [ ] process-auto-start
 - [ ] process-deadlines
 - [ ] use-qr
@@ -454,7 +757,7 @@ lib/
 
 ### 6. チャレンジ終了処理
 - UC16：deadline到達時、未完了ならChallengeがFAILEDになる（システム）
-- UC17：SUCCESS時にモック返金を受け取る（ユーザー起点／システム処理）
+- UC17：SUCCESS時にモック返金を受け取る（`complete_task`によるシステム自動処理。UIは成功演出・文言で受け取りを表示）
 - UC18：FAILED時、未返金分が教育用途ポイントとして付与される（システム）
 
 ### 7. QR
@@ -548,7 +851,7 @@ lib/
 
 ### 未確定(勝手に仕様化しない)
 
-- QRのセルをタスクごとに割り当てる具体的な方式(モックの方式をそのまま採用するか)
+- ~~QRのセルをタスクごとに割り当てる具体的な方式~~ → **決定E（v11・8章）**
 - 液体の波の描画をFlutterでどう実装するか
 
 
@@ -618,5 +921,120 @@ lib/
 - **`point_transactions.type` の値**: 仕様書に値の定義がない。現在は `GRANT` / `PURCHASE` / `CASHOUT` / `EXPIRE`
 - **金額とポイントの換算**: 仕様書に記載がない。付与額とChallenge金額の関係、`cashouts.cash_amount` の式チェックは未設定
 - **開始前の取り消し**: 仕様書2章に「取り消しは取り消し完了とする」とあるが、対応する状態・遷移の定義がない。現在は WAITING → FAILED を禁止
-- **QRセルの割り当て方式**(v4から継続): 進行中の表示は仮パターンで、読み取れるQRはSUCCESS時に作成される
+- ~~**QRセルの割り当て方式**~~ → **決定E（v11・8章）**
 - **未作成のもの**: Challenge作成・完了・失効などのサーバー関数、pg_cronのジョブ、`idempotency_keys` の期限切れ削除
+
+## 変更記録 v6(2026-10-06): Mock Payment API仕様の確定
+
+### 変更前
+- Mock Paymentは3つのEdge Function候補名と「モック決済」としての方針のみ定義され、Request/Response、エラー、冪等性、RPC、同時実行の詳細は未定義だった。
+
+### 変更後
+- `mock-payment-create`、`mock-payment-success`、`mock-payment-failure`のRequest/Response、入力検証、HTTP status、error codeを定義した。
+- Payment状態遷移を`PENDING → SUCCESS`または`PENDING → FAILED`に限定し、PENDINGの自動FAILED化、終端状態の再利用・再開を行わないことを定義した。
+- `idempotency_keys`のoperation、resource_id、request_hash、response、期限切れkeyの再利用不可、cleanup非実装を定義した。
+- Edge FunctionからPostgreSQL RPCを呼び出し、`SECURITY DEFINER`、`auth.uid()`、ユーザー単位advisory lock、`SELECT FOR UPDATE`、3秒のlock timeout、同一transaction処理を行う設計を定義した。
+- `create-challenge`へはSUCCESS後の`payment_id`とTask/RoutineのIDだけを渡し、amountやdeadline等をFlutterから送信しないことを定義した。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 6章 支払い・PayPayモック | Mock Payment APIの正式な状態遷移、API契約、冪等性、エラー、Security、Flutter接続を追加 |
+| 10章 データモデル | 既存の`payments`および`idempotency_keys`の利用方法を明確化。スキーマ変更は行わない |
+| 15章 アーキテクチャ責務 | Payment操作をEdge Function→PostgreSQL RPCで処理する責務を明確化 |
+| 17章 Edge Functions | 既存のMock Payment 3 Function候補に正式契約を付与 |
+| 18章 実装順序 | DB RPC・Edge Function・Flutter接続の前提仕様を確定 |
+
+### 変更しないもの
+- 既存migration、DB schema、RLS、grants、`create-challenge`、Flutterコード、Edge Functionコード、package、`.env`、Remote環境は変更しない。
+
+## 変更記録 v7(2026-10-06): start-challenge仕様の確定
+
+### 変更前
+- Challenge開始APIのRequest/Response、冪等性、手動開始と自動開始の共通処理が未確定だった。
+
+### 変更後
+- `start-challenge`は`challenge_id`と`idempotency_key`だけを受け取り、UUIDはcanonical lowercase、keyは1〜200文字とする。
+- 状態遷移は`WAITING → IN_PROGRESS`のみとし、手動開始は`auto_start_at`前でもサーバー時刻で開始する。`IN_PROGRESS`の再要求は既存の`started_at`を保持して現在状態を返す。
+- `SUCCESS`/`FAILED`およびdeadline到達後は開始不可とし、手動開始と自動開始はChallenge行ロックを使う共通DB処理で競合を排除する。
+- idempotency operationは`start-challenge`とし、同一key・同一request hashは保存済みResponseを返し、異なるoperationまたはhashは`idempotency_key_reused`とする。
+- 自動開始は`process-auto-start`が共通の開始処理を実行する。定期実行のRemote設定はpg_cron/pg_net/Vaultの構成確定と承認後に行う。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 3章 開始仕様 | 手動開始、5分後自動開始、deadline、競合制御を明確化 |
+| 13章 Transaction・競合制御 | `challenges`行ロックと`started_at`の一度だけ設定を適用 |
+| 17章 Edge Functions | `start-challenge`と`process-auto-start`の責務を追加 |
+| Flutter | WAITING画面から`start-challenge`を呼び、IN_PROGRESSを表示 |
+
+## 変更記録 v8(2026-10-08): complete-task HTTP契約の明文化
+
+### 変更前
+- 17章の`complete-task`はresult種別を含める旨のみで、業務上の成功・ソフト拒否と認証・入力・競合等のエラーをHTTP statusとJSONでどう切り分けるかが本文に未記載だった。
+
+### 変更後
+- 業務上の結果は HTTP 200 の`result`（`completed` / `challenge_success` / `already_completed` / `deadline_exceeded` / `invalid_state`）で返す。`invalid_state`は challenge が IN_PROGRESS でない場合（未開始・SUCCESS 済み・FAILED 済み）。認証・入力不正・対象なし・冪等キー不整合・競合・一時障害は`error_code`と 4xx/5xx で返す。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 17章 Edge Functions | `complete-task`のHTTP 200`result`と`error_code`+4xx/5xxの切り分けを明文化 |
+| Flutter / Edge Function | 既存実装（決定D）の契約を仕様本文に反映。付録A⑩のresult種別一覧は変更なし |
+
+## 変更記録 v9(2026-10-08): SUCCESS時モック返金（決定C）
+
+### 変更前
+- 7章は「SUCCESS時にチャレンジ金額をモック返金」とあるが、台帳・API・`complete_task`との一体処理が未定義だった。
+
+### 変更後
+- 返金は`complete_task`内でチャレンジ初回`SUCCESS`と同一トランザクション。記録は`challenges.refunded_at`（金額は`challenges.amount`全額）。`payments`は終端`SUCCESS`を維持。
+- `complete_task`の`challenge_success`レスポンスに`refunded: true`と`refund_amount`を含める。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 7章・10章・12章・13章 | 返金のデータとトランザクション境界を定義 |
+| 17章・UC17 | complete-taskレスポンスとUC17の処理主体を明確化 |
+| DB / Flutter | 新migration・RPC変更・pgTAP・Flutterは未実装（別タスク） |
+
+## 変更記録 v10(2026-10-08): 期限切れ未開始 WAITING と新規作成（決定L・案c）
+
+### 変更前
+- v5③により `WAITING` / `IN_PROGRESS` はユーザーごとに1件まで。期限切れかつ未開始の `WAITING` は `process_auto_start` / `start_challenge` で救済されず、`challenges_one_active_per_user` により新規作成もブロックされていた。
+
+### 変更後
+- **作成時の「アクティブ」判定**: `IN_PROGRESS` は常にブロック。`WAITING` は `deadline > clock_timestamp()` のときのみブロック（`create_challenge` RPC）。
+- **一意制約**: ユーザーごとに `IN_PROGRESS` は1件まで（部分ユニークインデックス）。期限切れ `WAITING` は複数残ってもよい（ゾンビ行）。
+- **12章は維持**: `WAITING` → `FAILED` の直接遷移は禁止。期限切れ未開始 `WAITING` は自動で `FAILED` にしない（決定Aの `process_deadlines` は `IN_PROGRESS` のみ）。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 2章・v5③ | 新規作成の制限は「進行中または期限内未開始」のみ |
+| 10章・DB | `challenges_one_active_per_user` を `challenges_one_in_progress_per_user` に置換 |
+| 12章 | 遷移図は変更なし（`WAITING` → `FAILED` 禁止を維持） |
+
+## 変更記録 v11(2026-10-08): QRセル割当・reveal（決定E・案A）
+
+### 変更前
+- v4・v5で「進行中は仮パターン／tokenはSUCCESS時のみ」と「タスクごとにセル開放」が並立していたが、割当アルゴリズム・SUCCESS時の差し替え・読取可能タイミングが未記載だった。
+
+### 変更後
+- **二段構え**: `IN_PROGRESS`はプレビューQR（固定プレビューURL＋`qrUtils`同等の割当・reveal）。`SUCCESS`以降は`qr_codes.token`のclaim QRと別演出。プレビューと本物のピクセル一致は不要。
+- 規範: Mulberry32 seed `20261004`、非finderのラウンドロビン、finderは最終タスク、reveal約800ms／最終光り約400ms、claimペイロードURL形式。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 8章 QR | 8.1〜8.6を新設。UC19はSUCCESS後の読取を明示 |
+| 9章 UI | 進行中は上部プレビューQR、成功時は成功画面で本物QR＋パズル演出（v4の役割分離を維持） |
+| v4未確定 | QRセル割当を解消 |
+| v5未確定⑦ | QRセル割当を解消 |
+| Flutter | 実装は8.6メモ（未着手）。DB変更は不要 |

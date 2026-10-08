@@ -1,7 +1,7 @@
 -- pgTAP: 制約・トリガー・RLS・権限のテスト(全体を1トランザクションで実行し、最後にロールバック)
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(57);
+select plan(58);
 
 -- ===== 準備: ユーザー(alice / bob) =====
 insert into auth.users (id, raw_user_meta_data) values
@@ -48,9 +48,9 @@ select throws_ok($$insert into public.challenges(user_id, payment_id, amount, de
 select lives_ok($$insert into public.challenges(id, user_id, payment_id, amount, deadline)
           values ('dddddddd-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000001', 'cccccccc-0000-0000-0000-000000000001', 500, now() + interval '1 hour')$$,
           '正しいChallengeは作れる');
-select throws_ok($$insert into public.challenges(user_id, payment_id, amount, deadline)
-          values ('aaaaaaaa-0000-0000-0000-000000000001', 'cccccccc-0000-0000-0000-000000000002', 100, now() + interval '1 hour')$$,
-          '23505', null, '同時に進行できるChallengeは1つまで');
+select lives_ok($$insert into public.challenges(id, user_id, payment_id, amount, deadline)
+          values ('dddddddd-0000-0000-0000-000000000006', 'aaaaaaaa-0000-0000-0000-000000000001', 'cccccccc-0000-0000-0000-000000000002', 100, now() + interval '1 hour')$$,
+          '2件目の期限内WAITINGはユニークインデックスでは許可される');
 select throws_ok($$insert into public.challenges(user_id, payment_id, amount, deadline)
           values ('bbbbbbbb-0000-0000-0000-000000000002', 'cccccccc-0000-0000-0000-000000000004', 100, now())$$,
           '23514', null, 'deadline が auto_start_at 以前だと拒否');
@@ -75,6 +75,9 @@ select throws_ok($$update public.challenge_tasks set status = 'COMPLETED', compl
 select lives_ok($$update public.challenges set status = 'IN_PROGRESS', started_at = now()
           where id = 'dddddddd-0000-0000-0000-000000000001'$$,
           'WAITING から IN_PROGRESS へ遷移できる');
+select throws_ok($$update public.challenges set status = 'IN_PROGRESS', started_at = now()
+          where id = 'dddddddd-0000-0000-0000-000000000006'$$,
+          '23505', null, 'IN_PROGRESSはユーザーごとに1件まで');
 select throws_ok($$update public.challenges set status = 'SUCCESS', finished_at = now()
           where id = 'dddddddd-0000-0000-0000-000000000001'$$,
           'P0001', null, '未完了タスクがあると SUCCESS にできない');
@@ -90,7 +93,7 @@ select is((select task_name_snapshot from public.challenge_tasks where challenge
 select throws_ok($$update public.challenge_tasks set status = 'INCOMPLETE', completed_at = null
           where challenge_id = 'dddddddd-0000-0000-0000-000000000001'$$,
           'P0001', null, 'COMPLETED から INCOMPLETE へは戻せない');
-select lives_ok($$update public.challenges set status = 'SUCCESS', finished_at = now()
+select lives_ok($$update public.challenges set status = 'SUCCESS', finished_at = now(), refunded_at = now()
           where id = 'dddddddd-0000-0000-0000-000000000001'$$,
           '全タスク完了なら SUCCESS にできる');
 select throws_ok($$update public.challenges set amount = 100 where id = 'dddddddd-0000-0000-0000-000000000001'$$,

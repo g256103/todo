@@ -1,0 +1,229 @@
+import 'mock_payment_service.dart';
+
+class CompletedChallengeTask {
+  const CompletedChallengeTask({
+    required this.id,
+    required this.challengeId,
+    required this.status,
+    required this.completedAt,
+  });
+
+  factory CompletedChallengeTask.fromJson(Object? data) {
+    if (data is! Map) throw const FormatException('Invalid task payload.');
+    final json = Map<String, dynamic>.from(data);
+    final id = json['id'];
+    final challengeId = json['challenge_id'];
+    final status = json['status'];
+    final completedAtRaw = json['completed_at'];
+
+    if (id is! String || challengeId is! String || status is! String) {
+      throw const FormatException('Invalid task payload.');
+    }
+
+    return CompletedChallengeTask(
+      id: id,
+      challengeId: challengeId,
+      status: status,
+      completedAt: completedAtRaw is String
+          ? DateTime.tryParse(completedAtRaw)
+          : null,
+    );
+  }
+
+  final String id;
+  final String challengeId;
+  final String status;
+  final DateTime? completedAt;
+}
+
+class CompleteTaskResponse {
+  const CompleteTaskResponse({
+    required this.result,
+    this.task,
+    this.challengeStatus,
+    this.invalidStateErrorCode,
+    this.refunded,
+    this.refundAmount,
+  });
+
+  factory CompleteTaskResponse.fromJson(Object? data) {
+    if (data is! Map) throw const FormatException('Invalid complete response.');
+    final json = Map<String, dynamic>.from(data);
+    final result = json['result'];
+    if (result is! String) {
+      throw const FormatException('Invalid complete response.');
+    }
+
+    if (result == 'deadline_exceeded') {
+      return const CompleteTaskResponse(result: 'deadline_exceeded');
+    }
+
+    if (result == 'invalid_state') {
+      final errorCode = json['error_code'];
+      if (errorCode is! String) {
+        throw const FormatException('Invalid complete response.');
+      }
+      return CompleteTaskResponse(
+        result: 'invalid_state',
+        invalidStateErrorCode: errorCode,
+      );
+    }
+
+    final challengeStatus = json['challenge_status'];
+    final taskData = json['challenge_task'];
+    if (challengeStatus is! String || taskData == null) {
+      throw const FormatException('Invalid complete response.');
+    }
+
+    final refunded = json['refunded'];
+    final refundAmountRaw = json['refund_amount'];
+    int? refundAmount;
+    if (refundAmountRaw is int) {
+      refundAmount = refundAmountRaw;
+    } else if (refundAmountRaw is num) {
+      refundAmount = refundAmountRaw.toInt();
+    }
+
+    return CompleteTaskResponse(
+      result: result,
+      task: CompletedChallengeTask.fromJson(taskData),
+      challengeStatus: challengeStatus,
+      refunded: refunded is bool ? refunded : null,
+      refundAmount: refundAmount,
+    );
+  }
+
+  /// `completed` | `challenge_success` | `already_completed` | `deadline_exceeded` | `invalid_state`
+  final String result;
+  final CompletedChallengeTask? task;
+  final String? challengeStatus;
+  final String? invalidStateErrorCode;
+  final bool? refunded;
+  final int? refundAmount;
+
+  bool get isSuccess =>
+      result == 'completed' ||
+      result == 'challenge_success' ||
+      result == 'already_completed';
+
+  bool get isRejection =>
+      result == 'deadline_exceeded' || result == 'invalid_state';
+
+  String? get rejectionUserMessage {
+    if (result == 'deadline_exceeded') {
+      return userMessageForCompleteTaskCode('deadline_exceeded');
+    }
+    if (result == 'invalid_state') {
+      return userMessageForCompleteTaskCode(
+        invalidStateErrorCode ?? 'internal_error',
+      );
+    }
+    return null;
+  }
+}
+
+class CompleteTaskApiException implements Exception {
+  const CompleteTaskApiException({
+    required this.statusCode,
+    required this.code,
+    required this.userMessage,
+  });
+
+  factory CompleteTaskApiException.fromResponse({
+    required int statusCode,
+    required Object? body,
+  }) {
+    final code = body is Map && body['error_code'] is String
+        ? body['error_code'] as String
+        : 'internal_error';
+    return CompleteTaskApiException(
+      statusCode: statusCode,
+      code: code,
+      userMessage: userMessageForCompleteTaskCode(code),
+    );
+  }
+
+  final int statusCode;
+  final String code;
+  final String userMessage;
+
+  @override
+  String toString() =>
+      'CompleteTaskApiException(statusCode: $statusCode, code: $code)';
+}
+
+String userMessageForCompleteTaskCode(String code) {
+  switch (code) {
+    case 'unauthorized':
+      return 'ログインが必要です。';
+    case 'task_not_found':
+      return 'タスクが見つかりません。';
+    case 'challenge_not_found':
+      return 'Challengeが見つかりません。';
+    case 'challenge_not_in_progress':
+      return '進行中のChallengeではありません。';
+    case 'challenge_already_success':
+      return 'すでに完了したChallengeです。';
+    case 'challenge_already_failed':
+      return 'すでに終了したChallengeです。';
+    case 'deadline_exceeded':
+      return '期限を過ぎたため完了できません。';
+    case 'idempotency_key_reused':
+      return 'タスク完了処理が重複しています。もう一度お試しください。';
+    case 'complete_task_conflict':
+      return 'タスク完了処理が競合しました。もう一度お試しください。';
+    case 'invalid_uuid':
+    case 'invalid_idempotency_key':
+    case 'unknown_field':
+      return 'タスク完了情報が正しくありません。';
+    case 'temporary_unavailable':
+      return 'タスク完了サービスが一時的に利用できません。';
+    default:
+      return 'タスクを完了できませんでした。';
+  }
+}
+
+class CompleteTaskService {
+  CompleteTaskService({
+    MockPaymentFunctionInvoker? invoker,
+    IdempotencyKeyGenerator? keyGenerator,
+  }) : _invoker = invoker ?? SupabaseMockPaymentFunctionInvoker(),
+       _keyGenerator = keyGenerator ?? UuidV4IdempotencyKeyGenerator();
+
+  final MockPaymentFunctionInvoker _invoker;
+  final IdempotencyKeyGenerator _keyGenerator;
+
+  Future<CompleteTaskResponse> complete({
+    required String challengeTaskId,
+    String? idempotencyKey,
+  }) async {
+    try {
+      final key = idempotencyKey ?? _keyGenerator.generate();
+      final response = await _invoker.invoke(
+        'complete-task',
+        body: {'challenge_task_id': challengeTaskId, 'idempotency_key': key},
+      );
+      if (response.statusCode != 200) {
+        throw CompleteTaskApiException.fromResponse(
+          statusCode: response.statusCode,
+          body: response.data,
+        );
+      }
+      return CompleteTaskResponse.fromJson(response.data);
+    } on CompleteTaskApiException {
+      rethrow;
+    } on FormatException {
+      throw const CompleteTaskApiException(
+        statusCode: 0,
+        code: 'internal_error',
+        userMessage: 'タスク完了の応答を解釈できませんでした。',
+      );
+    } catch (_) {
+      throw const CompleteTaskApiException(
+        statusCode: 0,
+        code: 'internal_error',
+        userMessage: 'タスク完了サービスに接続できませんでした。',
+      );
+    }
+  }
+}

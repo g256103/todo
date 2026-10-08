@@ -1,0 +1,45 @@
+---
+description: Supabase, Postgres, RLS, RPC, Edge Functions, migrations
+globs: supabase/**
+alwaysApply: false
+---
+
+# Supabase
+
+Use the `supabase-change` skill for any DB / RPC / function change.
+
+## Migrations
+- NEVER edit an existing migration file. Every change is a NEW migration (`supabase migration new <name>`).
+- If unsure whether a migration was applied, treat it as applied.
+- Keep each migration small and single-purpose.
+
+## Remote is off-limits without approval
+Allowed locally: `supabase start`, `supabase test db`, local resets. For remote changes the order is:
+read-only inspection -> `--dry-run` -> print `BLOCKED: USER APPROVAL REQUIRED` -> wait -> execute -> verify.
+Never run `supabase db push`, `supabase functions deploy`, or remote SQL without explicit approval in the current chat.
+
+## Security (applies to every SQL / function change)
+- RLS enabled on every table in an exposed schema. Never disable RLS to "make it work".
+- RLS/GRANT changes require approval (see AGENTS.md).
+- Every `SECURITY DEFINER` function: `SET search_path = ''` and fully schema-qualified names; derive the user from `auth.uid()`; check ownership of every row touched; `REVOKE ALL ... FROM PUBLIC, anon` then `GRANT EXECUTE` only to the roles that need it.
+- Validate all inputs (types, ranges, enums, nulls). Never build SQL by string concatenation.
+- No privilege escalation: callers must not be able to set status, owner, amount or payment fields directly.
+- service_role only in server-side code; never in Flutter, never logged.
+
+## Correctness
+- Wrap multi-step state changes in one transaction (a single RPC). Use `SELECT ... FOR UPDATE` on rows whose state you check then change.
+- Locks: follow spec ch.13 / v5 order — `challenges` → `challenge_tasks` → `qr_codes` → `points` → `point_transactions`. If existing code differs, treat it as a bug and report it.
+- Use READ COMMITTED only (no SERIALIZABLE). Set explicit `lock_timeout` to a few seconds.
+- `amount` is integer yen (no decimals). History reads snapshot columns (`task_name_snapshot`, etc.), not live task names.
+- State machine: enforce legal transitions in the DB (WAITING -> IN_PROGRESS -> SUCCESS/FAILED); SUCCESS is immutable.
+- Idempotency: store key + request fingerprint; same key + same request returns the stored result; same key + different request raises an error.
+- Manual Start and Auto Start must call the same DB function.
+
+## Edge Functions (Deno)
+- Verify the caller's JWT; derive identity from it, never from the request body.
+- Validate the request body; return consistent error shapes; never echo secrets or stack traces.
+- Checks: `deno fmt --check; deno check <entry>; deno test` (run inside the function's directory).
+
+## Tests
+- pgTAP tests in `supabase/tests/`: cover happy path, illegal transition, wrong owner, duplicate idempotency key, same key with different request, and RLS denial.
+- DB test fixtures: insert challenges as WAITING and move them through legal transitions (start_challenge etc.). Never insert IN_PROGRESS/SUCCESS/FAILED directly and never disable triggers. When changing a test file, report why and whether any assertion was added/removed.

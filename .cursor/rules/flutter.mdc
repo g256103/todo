@@ -1,0 +1,32 @@
+---
+description: Flutter/Dart + Riverpod conventions
+globs: **/*.dart,pubspec.yaml
+alwaysApply: false
+---
+
+# Flutter / Riverpod
+
+State management status: The codebase currently uses StatefulWidget; flutter_riverpod is not yet in pubspec.yaml. Use Riverpod for NEW features and for screens that must change substantially anyway; add the dependency when the first such feature is implemented (user approved). Do NOT mass-migrate existing screens. Match the existing StatefulWidget style elsewhere.
+
+Before writing code: check `pubspec.yaml` for the Riverpod version and whether `riverpod_generator` is used. Follow the EXISTING style in neighboring files. Do not mix generated and hand-written providers in one feature.
+
+## Riverpod
+- New code: prefer `Notifier` / `AsyncNotifier`. Do not introduce legacy `StateNotifier`, `StateProvider` or `ChangeNotifier` unless the surrounding code already uses it.
+- `ref.watch` only in `build` / provider bodies. `ref.read` in callbacks. `ref.listen` for side effects (navigation, snackbars). Never `ref.watch` inside callbacks.
+- All Supabase calls (RPC, Edge Function, queries) live in repository providers, never in widgets.
+- Always handle all `AsyncValue` states (loading, error, data). Surface errors to the user; never swallow them.
+- Keep providers small and autoDispose by default; keep alive only when state must persist.
+
+## Widgets / UI
+- No business logic or state transitions in widgets. Widgets render state and dispatch intents.
+- Check `context.mounted` after every `await` before using `BuildContext`.
+- Do not change existing UI layout, theme or navigation unless the task requires it.
+- Flutter Web is a target: avoid `dart:io`; use platform-safe APIs.
+- Do not add a package unless clearly needed; if you do, say why and pick a maintained one.
+- Task-completion long-press (4s) is presentation only. Send the completion request to the server and render the server result.
+- Long-press UX guards: issue idempotency key at hold start, memory only (never persist). Reset progress to 0 immediately on release, cancel, or app background. Only one hold at a time. Block starting a hold when under 5s to deadline (UX only; server time is authoritative). Provide a confirm-dialog alternative for screen readers (same complete-task call).
+
+## Tests
+- Test providers/notifiers with `ProviderContainer` and `overrides`; fake the repository. Never hit a real Supabase in unit tests.
+- Add or update a test for each behavior change. Keep tests deterministic (no real timers; use fake async).
+- Follow the `verification` skill for commands.
