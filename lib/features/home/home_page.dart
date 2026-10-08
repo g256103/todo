@@ -10,6 +10,7 @@ import '../points/point_repository.dart';
 import '../settings/settings_tab.dart';
 import '../../services/cashout_points_service.dart';
 import '../../services/purchase_points_service.dart';
+import '../../services/server_clock.dart';
 import 'mock_payment_home_page.dart';
 import '../routines/routine_editor_view.dart';
 import '../tasks/task_name_validator.dart';
@@ -29,7 +30,8 @@ class TabbedHomePage extends StatefulWidget {
   State<TabbedHomePage> createState() => _TabbedHomePageState();
 }
 
-class _TabbedHomePageState extends State<TabbedHomePage> {
+class _TabbedHomePageState extends State<TabbedHomePage>
+    with WidgetsBindingObserver {
   static const _titles = ['メイン', 'ポイント', '設定', '履歴', '編集'];
   int _selectedIndex = 0;
   late final List<Widget> _pages;
@@ -37,6 +39,8 @@ class _TabbedHomePageState extends State<TabbedHomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    serverClock.sync();
     _pages = [
       const MockPaymentHomePage(),
       const PointsPage(),
@@ -44,6 +48,19 @@ class _TabbedHomePageState extends State<TabbedHomePage> {
       const HistoryPage(),
       const TaskEditorPage(),
     ];
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      serverClock.sync();
+    }
   }
 
   @override
@@ -513,7 +530,7 @@ class _PointsPageState extends State<PointsPage> {
 
   Future<void> _cashout() async {
     if (_isActionInProgress) return;
-    final now = DateTime.now().toUtc();
+    final now = serverClock.nowUtc();
     if (!_cashoutProgress.isEligible(now)) return;
 
     final pointsController = TextEditingController(text: '1000');
@@ -601,7 +618,7 @@ class _PointsPageState extends State<PointsPage> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final now = DateTime.now().toUtc();
+    final now = serverClock.nowUtc();
     final successCount = _cashoutProgress.successCount;
     final daysLeft = _cashoutProgress.daysUntilContinuityMet(now);
     final cashoutEligible = _cashoutProgress.isEligible(now);

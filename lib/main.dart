@@ -18,7 +18,11 @@ Future<void> main() async {
     throw StateError('SUPABASE_URL and SUPABASE_ANON_KEY must be set in .env');
   }
 
-  await Supabase.initialize(url: supabaseUrl, publishableKey: supabaseAnonKey);
+  await Supabase.initialize(
+    url: supabaseUrl,
+    publishableKey: supabaseAnonKey,
+    authOptions: const FlutterAuthClientOptions(autoRefreshToken: true),
+  );
 
   runApp(const MyApp());
 }

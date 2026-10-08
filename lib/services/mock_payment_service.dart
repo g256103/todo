@@ -3,6 +3,8 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'session_refresh.dart';
+
 class MockPayment {
   const MockPayment({
     required this.id,
@@ -138,6 +140,7 @@ class SupabaseMockPaymentFunctionInvoker implements MockPaymentFunctionInvoker {
     required Map<String, Object?> body,
   }) async {
     try {
+      await ensureFreshSession(_client);
       final response = await _client.functions.invoke(functionName, body: body);
       return MockPaymentFunctionResponse(
         statusCode: response.status,

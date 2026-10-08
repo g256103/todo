@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/complete_task_service.dart';
+import '../../services/server_clock.dart';
 import '../../services/create_challenge_service.dart';
 import '../../services/mock_payment_service.dart';
 import '../../services/start_challenge_service.dart';
@@ -41,6 +42,7 @@ class MockPaymentHomePage extends StatefulWidget {
   final QrRepository? qrRepository;
   final Future<QrCodeRecord?> Function(String challengeId)? qrLoader;
   final UseQrService? useQrService;
+
   /// When true, skips IN_PROGRESS cell reveal timing (for widget tests).
   final bool skipQrRevealAnimation;
 
@@ -329,7 +331,7 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
       final record = widget.qrLoader != null
           ? await widget.qrLoader!(challengeId)
           : await (_qrRepository ?? widget.qrRepository ?? QrRepository())
-              .fetchByChallengeId(challengeId);
+                .fetchByChallengeId(challengeId);
       if (!mounted) return;
       setState(() {
         _qrRecord = record;
@@ -352,7 +354,9 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
       _errorMessage = null;
     });
     try {
-      final response = await (_useQrService ?? UseQrService()).use(token: token);
+      final response = await (_useQrService ?? UseQrService()).use(
+        token: token,
+      );
       if (!mounted) return;
       if (response.result == 'used') {
         setState(() {
@@ -736,6 +740,7 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
                   taskName: task.taskNameSnapshot,
                   isCompleted: _taskStatuses[task.id] == 'COMPLETED',
                   deadline: challenge.deadline,
+                  now: serverClock.nowUtc,
                   isExclusiveLocked:
                       _activeHoldingTaskId != null &&
                       _activeHoldingTaskId != task.id,

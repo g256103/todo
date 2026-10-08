@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/server_clock.dart';
+
 class AuthService {
   AuthService({SupabaseClient? client})
     : _client = client ?? Supabase.instance.client;
@@ -33,6 +35,7 @@ class AuthService {
     if (client == null) {
       throw StateError('AuthService is not configured for authentication.');
     }
+    serverClock.reset();
     return client.auth.signOut();
   }
 }

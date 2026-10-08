@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Supabase
 
-Use the `supabase-change` skill for any DB / RPC / function change.
+Use the **`supabase-change`** skill for any DB / RPC / function change; use **`verification`** before declaring done.
 
 ## Migrations
 - NEVER edit an existing migration file. Every change is a NEW migration (`supabase migration new <name>`).
@@ -20,7 +20,8 @@ Never run `supabase db push`, `supabase functions deploy`, or remote SQL without
 
 ## Security (applies to every SQL / function change)
 - RLS enabled on every table in an exposed schema. Never disable RLS to "make it work".
-- RLS/GRANT changes require approval (see AGENTS.md).
+- RLS/GRANT changes: follow approval flow in **`supabase-change`** (and AGENTS.md hard stops).
+- Never use `USING (true)` / `WITH CHECK (true)` in migrations or policies, except the documented layer-isolation exception in **`supabase-change`**.
 - Every `SECURITY DEFINER` function: `SET search_path = ''` and fully schema-qualified names; derive the user from `auth.uid()`; check ownership of every row touched; `REVOKE ALL ... FROM PUBLIC, anon` then `GRANT EXECUTE` only to the roles that need it.
 - Validate all inputs (types, ranges, enums, nulls). Never build SQL by string concatenation.
 - No privilege escalation: callers must not be able to set status, owner, amount or payment fields directly.
@@ -43,3 +44,11 @@ Never run `supabase db push`, `supabase functions deploy`, or remote SQL without
 ## Tests
 - pgTAP tests in `supabase/tests/`: cover happy path, illegal transition, wrong owner, duplicate idempotency key, same key with different request, and RLS denial.
 - DB test fixtures: insert challenges as WAITING and move them through legal transitions (start_challenge etc.). Never insert IN_PROGRESS/SUCCESS/FAILED directly and never disable triggers. When changing a test file, report why and whether any assertion was added/removed.
+
+## New `public` tables
+- Full procedure: **`supabase-change`** (approval, RLS/GRANT in migration, `013_rls_matrix.test.sql`, local checks).
+- Standards in brief: `user_id` references **`public.users`** (not `auth.users` directly); add **`unique (id, user_id)`** and an index on **`user_id`**; use **non-colliding fixture UUIDs** in `013` (scan existing IDs in that file).
+
+## Production ops (RLS bypass — accepted residual risk)
+- Table owners, `service_role`, and direct SQL via Supabase Studio or the `postgres` role **bypass RLS** unless `FORCE ROW LEVEL SECURITY` is set (we intentionally do not use FORCE RLS today).
+- Treat privileged SQL as break-glass only; document who may run it and never use it to “fix” app bugs. Client-facing safety still depends on RLS + GRANT for `authenticated` / `anon`.
