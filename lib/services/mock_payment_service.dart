@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class MockPayment {
@@ -136,11 +137,21 @@ class SupabaseMockPaymentFunctionInvoker implements MockPaymentFunctionInvoker {
     String functionName, {
     required Map<String, Object?> body,
   }) async {
-    final response = await _client.functions.invoke(functionName, body: body);
-    return MockPaymentFunctionResponse(
-      statusCode: response.status,
-      data: response.data,
-    );
+    try {
+      final response = await _client.functions.invoke(functionName, body: body);
+      return MockPaymentFunctionResponse(
+        statusCode: response.status,
+        data: response.data,
+      );
+    } on FunctionException catch (error) {
+      if (error is FunctionsFetchException) {
+        rethrow;
+      }
+      return MockPaymentFunctionResponse(
+        statusCode: error.status,
+        data: error.details,
+      );
+    }
   }
 }
 
@@ -222,6 +233,15 @@ class MockPaymentService {
       return response;
     } on MockPaymentApiException {
       rethrow;
+    } on FunctionsFetchException {
+      throw MockPaymentApiException(
+        statusCode: 0,
+        code: 'internal_error',
+        userMessage: kDebugMode
+            ? '支払いサービスに接続できませんでした。'
+                  'Webの場合は --web-port=3000 または実機でお試しください。'
+            : '支払いサービスに接続できませんでした。',
+      );
     } catch (_) {
       throw const MockPaymentApiException(
         statusCode: 0,
