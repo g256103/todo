@@ -19,7 +19,7 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 | Points | PARTIAL | point_repository.dart, PointsPage | GRANT on FAILED only; no purchase/cashout/expiry job |
 | History | PARTIAL | history_repository.dart, HistoryPage | No long-press detail (spec 9) |
 | Settings | PARTIAL | home_page.dart (_SettingsPage) | Logout only; no user_name / terms |
-| QR | PARTIAL | 20261007080340, qr_codes, pgTAP 008 | SUCCESS時に作成済み。セル割当・reveal・use-qr は決定E待ち |
+| QR | PARTIAL | 20261008103000, use-qr, qr_codes, pgTAP 008/009 | use_qr RPC+Edge DONE; セル割当・reveal・Flutter読取は決定E待ち |
 
 ## Next items (ordered, one line each)
 1. ~~process_deadlines: IN_PROGRESS only; pgTAP 007 mixed WAITING/IN_PROGRESS.~~ DONE (20261007074123).
@@ -27,7 +27,7 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 2. ~~complete_task: qr_codes on SUCCESS + lock order challenges -> challenge_tasks -> qr_codes.~~ DONE (20261007080340, 20261007080342).
 3. ~~complete-task contract per spec ch.17 (result fields, not HTTP 409 for deadline_exceeded / invalid_state): Edge Function + Flutter service + tests.~~ DONE (2026-10-08).
 4. ~~Long-press guards: background reset; idempotency key at hold start (memory only).~~ DONE (2026-10-08).
-5. use-qr RPC + Edge Function (+ pgTAP).
+5. ~~use-qr RPC + Edge Function (+ pgTAP).~~ DONE (20261008103000, 2026-10-08).
 
 ## Needs user decision
 - C. Mock refund on SUCCESS: no ledger/field defined yet.
@@ -50,7 +50,7 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 
 ## Known issues / flaky tests
 - 2026-10-08 baseline: dart analyze 0 issues; flutter test 61 passed, 0 failed.
-- supabase test db (local): 8 files; run `supabase db reset` then `supabase test db` (migrations through 20261007080342).
+- supabase test db (local): 9 files; run `supabase db reset` then `supabase test db` (migrations through 20261008103000).
 - Remote: SUCCESS challenges created before 20261007080340 may lack `qr_codes` rows; backfill needs approval (one-off migration or ops), not done in this change.
 
 ## Remote state (update only after user confirms)
