@@ -9,9 +9,13 @@ import 'package:todo/services/mock_payment_service.dart';
 import 'package:todo/services/start_challenge_service.dart';
 
 class _FakeInvoker implements MockPaymentFunctionInvoker {
-  _FakeInvoker({this.completeTaskResult = 'challenge_success'});
+  _FakeInvoker({
+    this.completeTaskResult = 'challenge_success',
+    this.completeTaskDelay,
+  });
 
   final String completeTaskResult;
+  final Duration? completeTaskDelay;
   int callCount = 0;
   final calls = <({String name, Map<String, Object?> body})>[];
 
@@ -62,6 +66,9 @@ class _FakeInvoker implements MockPaymentFunctionInvoker {
       );
     }
     if (functionName == 'complete-task') {
+      if (completeTaskDelay != null) {
+        await Future<void>.delayed(completeTaskDelay!);
+      }
       if (completeTaskResult == 'deadline_exceeded') {
         return MockPaymentFunctionResponse(
           statusCode: 200,
@@ -257,4 +264,72 @@ void main() {
 
     expect(find.text('期限を過ぎたため完了できません。'), findsOneWidget);
   });
+
+  testWidgets(
+    'does not treat complete-task success when page unmounted mid-request',
+    (tester) async {
+      final invoker = _FakeInvoker(
+        completeTaskDelay: const Duration(seconds: 1),
+      );
+      final paymentService = MockPaymentService(
+        invoker: invoker,
+        keyGenerator: _FixedKeyGenerator(),
+      );
+      final challengeService = CreateChallengeService(
+        invoker: invoker,
+        keyGenerator: _FixedKeyGenerator(),
+      );
+      final startChallengeService = StartChallengeService(
+        invoker: invoker,
+        keyGenerator: _FixedKeyGenerator(),
+      );
+      final completeTaskService = CompleteTaskService(
+        invoker: invoker,
+        keyGenerator: _FixedKeyGenerator(),
+      );
+      final task = Task(
+        id: 'task-1',
+        userId: 'user-1',
+        name: 'テストタスク',
+        createdAt: DateTime.utc(2026),
+        updatedAt: DateTime.utc(2026),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: MockPaymentHomePage(
+              paymentService: paymentService,
+              challengeService: challengeService,
+              startChallengeService: startChallengeService,
+              completeTaskService: completeTaskService,
+              taskLoader: () async => [task],
+              routineLoader: () async => const <Routine>[],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('¥1000 をコミットする'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('支払い成功'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Challengeを作成する'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('チャレンジ開始'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.accessibility));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('完了する'));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+      await tester.pump(const Duration(seconds: 2));
+
+      expect(invoker.calls.where((c) => c.name == 'complete-task').length, 1);
+      expect(find.text('チャレンジ達成！ 🎉'), findsNothing);
+    },
+  );
 }

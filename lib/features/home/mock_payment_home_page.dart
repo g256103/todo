@@ -155,12 +155,16 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
     });
   }
 
-  Future<bool> _completeTask(String challengeTaskId) async {
+  Future<bool> _completeTask(
+    String challengeTaskId, {
+    required String idempotencyKey,
+  }) async {
     try {
       final response = await _completeTaskService.complete(
         challengeTaskId: challengeTaskId,
+        idempotencyKey: idempotencyKey,
       );
-      if (!mounted) return true;
+      if (!mounted) return false;
       if (response.isRejection) {
         setState(() {
           _errorMessage = response.rejectionUserMessage ?? 'タスクを完了できませんでした。';
@@ -622,7 +626,8 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
                   onLockReleased: () {
                     setState(() => _activeHoldingTaskId = null);
                   },
-                  onComplete: () => _completeTask(task.id),
+                  onComplete: (idempotencyKey) =>
+                      _completeTask(task.id, idempotencyKey: idempotencyKey),
                 ),
             ],
           ),
