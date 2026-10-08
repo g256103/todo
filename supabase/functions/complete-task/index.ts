@@ -21,14 +21,16 @@ const errorStatuses: Record<string, number> = {
   invalid_idempotency_key: 422,
   task_not_found: 404,
   challenge_not_found: 404,
-  challenge_already_success: 409,
-  challenge_already_failed: 409,
-  challenge_not_in_progress: 409,
-  deadline_exceeded: 409,
   idempotency_key_reused: 409,
   complete_task_conflict: 409,
   temporary_unavailable: 503,
 };
+
+const invalidStateRpcCodes = new Set([
+  "challenge_not_in_progress",
+  "challenge_already_success",
+  "challenge_already_failed",
+]);
 
 export type CompleteTaskRequest = {
   challenge_task_id: string;
@@ -60,8 +62,23 @@ export function validateRequest(
 export function mapDatabaseError(error: unknown): {
   errorCode: string;
   status: number;
+  resultBody?: Record<string, unknown>;
 } {
   const errorCode = dbErrorCode(error);
+  if (errorCode === "deadline_exceeded") {
+    return {
+      errorCode,
+      status: 200,
+      resultBody: { result: "deadline_exceeded" },
+    };
+  }
+  if (invalidStateRpcCodes.has(errorCode)) {
+    return {
+      errorCode,
+      status: 200,
+      resultBody: { result: "invalid_state", error_code: errorCode },
+    };
+  }
   return { errorCode, status: errorStatuses[errorCode] ?? 500 };
 }
 
@@ -91,6 +108,9 @@ export async function handleRequest(
   });
   if (error) {
     const mapped = mapDatabaseError(error);
+    if (mapped.resultBody) {
+      return jsonResponse(mapped.resultBody, 200, request);
+    }
     return errorResponse(mapped.errorCode, mapped.status, request);
   }
   if (!isRecord(data)) return errorResponse("internal_error", 500, request);

@@ -58,7 +58,7 @@ void main() {
       'idempotency_key': 'complete-key',
     });
     expect(res.result, 'completed');
-    expect(res.task.status, 'COMPLETED');
+    expect(res.task?.status, 'COMPLETED');
     expect(res.challengeStatus, 'IN_PROGRESS');
   });
 
@@ -84,8 +84,58 @@ void main() {
     expect(res.challengeStatus, 'SUCCESS');
   });
 
+  test(
+    'parses HTTP 200 deadline_exceeded as a result, not an exception',
+    () async {
+      final invoker = _FakeInvoker(
+        MockPaymentFunctionResponse(
+          statusCode: 200,
+          data: {'result': 'deadline_exceeded'},
+        ),
+      );
+      final service = CompleteTaskService(
+        invoker: invoker,
+        keyGenerator: _FixedKeyGenerator(),
+      );
+      final res = await service.complete(
+        challengeTaskId: '33333333-3333-4333-8333-333333333333',
+      );
+
+      expect(res.result, 'deadline_exceeded');
+      expect(res.task, isNull);
+      expect(res.challengeStatus, isNull);
+      expect(res.invalidStateErrorCode, isNull);
+      expect(res.rejectionUserMessage, '期限を過ぎたため完了できません。');
+    },
+  );
+
+  test('parses HTTP 200 invalid_state with diagnostic error_code', () async {
+    final invoker = _FakeInvoker(
+      MockPaymentFunctionResponse(
+        statusCode: 200,
+        data: {
+          'result': 'invalid_state',
+          'error_code': 'challenge_not_in_progress',
+        },
+      ),
+    );
+    final service = CompleteTaskService(
+      invoker: invoker,
+      keyGenerator: _FixedKeyGenerator(),
+    );
+    final res = await service.complete(
+      challengeTaskId: '33333333-3333-4333-8333-333333333333',
+    );
+
+    expect(res.result, 'invalid_state');
+    expect(res.invalidStateErrorCode, 'challenge_not_in_progress');
+    expect(res.task, isNull);
+    expect(res.challengeStatus, isNull);
+    expect(res.rejectionUserMessage, '進行中のChallengeではありません。');
+  });
+
   for (final status in [401, 404, 409, 422, 503, 500]) {
-    test('maps HTTP $status', () async {
+    test('maps HTTP $status to exception', () async {
       final invoker = _FakeInvoker(
         MockPaymentFunctionResponse(
           statusCode: status,

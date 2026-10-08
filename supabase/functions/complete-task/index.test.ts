@@ -62,7 +62,10 @@ Deno.test("complete validates HTTP and request contract", async () => {
     throw new Error("GET method");
   }
   if (
-    (await handleRequest(request(valid, { authorization: "invalid" }), dependencies()))
+    (await handleRequest(
+      request(valid, { authorization: "invalid" }),
+      dependencies(),
+    ))
       .status !== 401
   ) {
     throw new Error("unauthorized");
@@ -93,7 +96,7 @@ Deno.test("complete validates HTTP and request contract", async () => {
   }
 });
 
-Deno.test("complete handles success and errors", async () => {
+Deno.test("complete handles success and hard errors", async () => {
   const successRes = await handleRequest(request(valid), dependencies());
   if (successRes.status !== 200) throw new Error("status not 200");
   const data = await successRes.json();
@@ -104,13 +107,75 @@ Deno.test("complete handles success and errors", async () => {
   if (mapDatabaseError({ message: "task_not_found" }).status !== 404) {
     throw new Error("404");
   }
-  if (mapDatabaseError({ message: "deadline_exceeded" }).status !== 409) {
-    throw new Error("409");
-  }
   if (mapDatabaseError({ message: "complete_task_conflict" }).status !== 409) {
     throw new Error("409 conflict");
   }
-  if (mapDatabaseError({ code: "55P03" }).status !== 503) {
+  if (mapDatabaseError({ message: "idempotency_key_reused" }).status !== 409) {
+    throw new Error("409 idempotency");
+  }
+  if (mapDatabaseError({ message: "temporary_unavailable" }).status !== 503) {
     throw new Error("503");
+  }
+
+  const notFoundRes = await handleRequest(
+    request(valid),
+    dependencies({ rpcError: { message: "task_not_found" } }),
+  );
+  if (notFoundRes.status !== 404) throw new Error("task_not_found status");
+});
+
+Deno.test("complete maps soft RPC rejections to HTTP 200 result bodies", async () => {
+  const deadlineRes = await handleRequest(
+    request(valid),
+    dependencies({ rpcError: { message: "deadline_exceeded" } }),
+  );
+  if (deadlineRes.status !== 200) throw new Error("deadline_exceeded status");
+  const deadlineBody = await deadlineRes.json();
+  if (deadlineBody.result !== "deadline_exceeded") {
+    throw new Error("deadline_exceeded result");
+  }
+  if (
+    deadlineBody.challenge_task !== undefined ||
+    deadlineBody.challenge_status !== undefined
+  ) {
+    throw new Error("deadline_exceeded must not include task fields");
+  }
+
+  const mappedDeadline = mapDatabaseError({ message: "deadline_exceeded" });
+  if (mappedDeadline.status !== 200) throw new Error("mapped deadline status");
+  if (mappedDeadline.resultBody?.result !== "deadline_exceeded") {
+    throw new Error("mapped deadline body");
+  }
+
+  for (
+    const code of [
+      "challenge_not_in_progress",
+      "challenge_already_success",
+      "challenge_already_failed",
+    ]
+  ) {
+    const res = await handleRequest(
+      request(valid),
+      dependencies({ rpcError: { message: code } }),
+    );
+    if (res.status !== 200) throw new Error(`${code} status`);
+    const body = await res.json();
+    if (body.result !== "invalid_state" || body.error_code !== code) {
+      throw new Error(`${code} body`);
+    }
+    if (
+      body.challenge_task !== undefined || body.challenge_status !== undefined
+    ) {
+      throw new Error(`${code} must not include task fields`);
+    }
+
+    const mapped = mapDatabaseError({ message: code });
+    if (mapped.status !== 200) throw new Error(`mapped ${code} status`);
+    if (
+      mapped.resultBody?.result !== "invalid_state" ||
+      mapped.resultBody?.error_code !== code
+    ) {
+      throw new Error(`mapped ${code} body`);
+    }
   }
 });

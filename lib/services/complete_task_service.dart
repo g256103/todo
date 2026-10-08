@@ -39,18 +39,37 @@ class CompletedChallengeTask {
 class CompleteTaskResponse {
   const CompleteTaskResponse({
     required this.result,
-    required this.task,
-    required this.challengeStatus,
+    this.task,
+    this.challengeStatus,
+    this.invalidStateErrorCode,
   });
 
   factory CompleteTaskResponse.fromJson(Object? data) {
     if (data is! Map) throw const FormatException('Invalid complete response.');
     final json = Map<String, dynamic>.from(data);
     final result = json['result'];
+    if (result is! String) {
+      throw const FormatException('Invalid complete response.');
+    }
+
+    if (result == 'deadline_exceeded') {
+      return const CompleteTaskResponse(result: 'deadline_exceeded');
+    }
+
+    if (result == 'invalid_state') {
+      final errorCode = json['error_code'];
+      if (errorCode is! String) {
+        throw const FormatException('Invalid complete response.');
+      }
+      return CompleteTaskResponse(
+        result: 'invalid_state',
+        invalidStateErrorCode: errorCode,
+      );
+    }
+
     final challengeStatus = json['challenge_status'];
     final taskData = json['challenge_task'];
-
-    if (result is! String || challengeStatus is! String || taskData == null) {
+    if (challengeStatus is! String || taskData == null) {
       throw const FormatException('Invalid complete response.');
     }
 
@@ -61,10 +80,31 @@ class CompleteTaskResponse {
     );
   }
 
-  final String
-  result; // 'completed' | 'challenge_success' | 'already_completed'
-  final CompletedChallengeTask task;
-  final String challengeStatus; // 'IN_PROGRESS' | 'SUCCESS'
+  /// `completed` | `challenge_success` | `already_completed` | `deadline_exceeded` | `invalid_state`
+  final String result;
+  final CompletedChallengeTask? task;
+  final String? challengeStatus;
+  final String? invalidStateErrorCode;
+
+  bool get isSuccess =>
+      result == 'completed' ||
+      result == 'challenge_success' ||
+      result == 'already_completed';
+
+  bool get isRejection =>
+      result == 'deadline_exceeded' || result == 'invalid_state';
+
+  String? get rejectionUserMessage {
+    if (result == 'deadline_exceeded') {
+      return userMessageForCompleteTaskCode('deadline_exceeded');
+    }
+    if (result == 'invalid_state') {
+      return userMessageForCompleteTaskCode(
+        invalidStateErrorCode ?? 'internal_error',
+      );
+    }
+    return null;
+  }
 }
 
 class CompleteTaskApiException implements Exception {
@@ -84,7 +124,7 @@ class CompleteTaskApiException implements Exception {
     return CompleteTaskApiException(
       statusCode: statusCode,
       code: code,
-      userMessage: _messageFor(code),
+      userMessage: userMessageForCompleteTaskCode(code),
     );
   }
 
@@ -97,7 +137,7 @@ class CompleteTaskApiException implements Exception {
       'CompleteTaskApiException(statusCode: $statusCode, code: $code)';
 }
 
-String _messageFor(String code) {
+String userMessageForCompleteTaskCode(String code) {
   switch (code) {
     case 'unauthorized':
       return 'ログインが必要です。';

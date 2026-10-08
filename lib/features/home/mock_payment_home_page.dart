@@ -161,6 +161,12 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
         challengeTaskId: challengeTaskId,
       );
       if (!mounted) return true;
+      if (response.isRejection) {
+        setState(() {
+          _errorMessage = response.rejectionUserMessage ?? 'タスクを完了できませんでした。';
+        });
+        return false;
+      }
       setState(() {
         _taskStatuses[challengeTaskId] = 'COMPLETED';
         _errorMessage = null;
