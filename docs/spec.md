@@ -352,7 +352,8 @@ Flutterから`user_id`、`status`、`paid_at`、`created_at`、`updated_at`、Pa
 ## 7. 成功・失敗・ポイント
 
 - [ ] SUCCESS時にQRを利用可能にする。
-- [ ] SUCCESS時はチャレンジ金額を返金する。返金も今回はモック。
+- [ ] SUCCESS時はチャレンジ金額（`challenges.amount`、全額）をモック返金する。`payments.status`はコミット時の`SUCCESS`を維持し、返金は`challenges.refunded_at`で記録する（ポイント台帳には載せない）。
+- [ ] モック返金は`complete_task` RPC内で、初回のチャレンジ`SUCCESS`遷移と`qr_codes`作成と同一トランザクションで行う。別のMock Payment Edge Functionは追加しない。
 - [ ] 期限到達時に未完了ならFAILED。
 - [ ] FAILED時、返金されなかった金額を教育用途ポイントとして付与する。
 - [ ] ポイント用途は書籍・学習・資格教材等。
@@ -407,7 +408,7 @@ routine_id FK / task_id FK / PK=(routine_id, task_id) / 多対多
 id PK / user_id FK / amount（integer、円単位・小数点なし） / status / created_at / paid_at / PENDING/SUCCESS/FAILED
 
 **challenges**
-id PK / user_id FK / payment_id FK / amount（integer） / status / created_at / auto_start_at / started_at / deadline / finished_at / WAITING/IN_PROGRESS/SUCCESS/FAILED
+id PK / user_id FK / payment_id FK / amount（integer） / status / created_at / auto_start_at / started_at / deadline / finished_at / refunded_at（timestamptz、モック返金確定時刻） / WAITING/IN_PROGRESS/SUCCESS/FAILED。`status = 'SUCCESS'`のときのみ`refunded_at`はNOT NULL（`FAILED`等ではNULL）。
 
 **challenge_tasks**
 id PK / challenge_id FK / task_id FK / task_name_snapshot / status / completed_at / created_at / INCOMPLETE/COMPLETED
@@ -459,7 +460,7 @@ key / user_id / operation / resource_id / created_at / 重要操作の二重実�
 
 - [ ] Challenge作成＋challenge_tasks作成を1トランザクション。
 - [ ] Task完了＋全タスク確認＋SUCCESS化を1トランザクション。
-- [ ] SUCCESS＋QR AVAILABLE化を一体で確定。
+- [ ] SUCCESS＋モック返金（`refunded_at`設定）＋QR AVAILABLE化を一体で確定。
 - [ ] FAILED＋ポイント付与を1トランザクション。
 - [ ] ポイント交換を1トランザクション。
 - [ ] 現金化を1トランザクション。
@@ -519,6 +520,7 @@ lib/
 - [ ] start-challenge
 - [ ] complete-task（レスポンスにresult種別：completed／challenge_success／already_completed／deadline_exceeded／invalid_stateを含める）
   - complete-task: 業務上の結果は HTTP 200 の result で返す(completed / challenge_success / already_completed / deadline_exceeded / invalid_state)。invalid_state は challenge が IN_PROGRESS でない場合(未開始・SUCCESS 済み・FAILED 済み)。認証・入力不正・対象なし・冪等キー不整合・競合・一時障害は error_code + 4xx/5xx。
+  - `result = challenge_success`のとき、RPCレスポンス（Edgeはそのまま返す）に`refunded: true`と`refund_amount`（integer、円、`challenges.amount`と同値）を含める。それ以外の result では含めない。
 - [ ] process-auto-start
 - [ ] process-deadlines
 - [ ] use-qr
@@ -699,7 +701,7 @@ lib/
 
 ### 6. チャレンジ終了処理
 - UC16：deadline到達時、未完了ならChallengeがFAILEDになる（システム）
-- UC17：SUCCESS時にモック返金を受け取る（ユーザー起点／システム処理）
+- UC17：SUCCESS時にモック返金を受け取る（`complete_task`によるシステム自動処理。UIは成功演出・文言で受け取りを表示）
 - UC18：FAILED時、未返金分が教育用途ポイントとして付与される（システム）
 
 ### 7. QR
@@ -926,3 +928,20 @@ lib/
 |---|---|
 | 17章 Edge Functions | `complete-task`のHTTP 200`result`と`error_code`+4xx/5xxの切り分けを明文化 |
 | Flutter / Edge Function | 既存実装（決定D）の契約を仕様本文に反映。付録A⑩のresult種別一覧は変更なし |
+
+## 変更記録 v9(2026-10-08): SUCCESS時モック返金（決定C）
+
+### 変更前
+- 7章は「SUCCESS時にチャレンジ金額をモック返金」とあるが、台帳・API・`complete_task`との一体処理が未定義だった。
+
+### 変更後
+- 返金は`complete_task`内でチャレンジ初回`SUCCESS`と同一トランザクション。記録は`challenges.refunded_at`（金額は`challenges.amount`全額）。`payments`は終端`SUCCESS`を維持。
+- `complete_task`の`challenge_success`レスポンスに`refunded: true`と`refund_amount`を含める。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 7章・10章・12章・13章 | 返金のデータとトランザクション境界を定義 |
+| 17章・UC17 | complete-taskレスポンスとUC17の処理主体を明確化 |
+| DB / Flutter | 新migration・RPC変更・pgTAP・Flutterは未実装（別タスク） |

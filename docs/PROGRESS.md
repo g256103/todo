@@ -14,7 +14,7 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 | Mock Payment (server-side) | DONE | 20261006104500, mock-payment-*, mock_payment_service.dart, pgTAP 003 | |
 | Challenge creation | DONE | 20261005090000, create-challenge, create_challenge_service.dart, pgTAP 002 | |
 | Challenge start (manual / auto share one DB path) | PARTIAL | 20261006140000, start-challenge, process-auto-start, pgTAP 004 | No pg_cron scheduler (approval needed) |
-| Challenge task completion (server-validated) | PARTIAL | 20261006180000–080342, complete-task, complete_task_service.dart, battery_hold_to_complete_tile.dart, pgTAP 005/008 | Mock refund missing; ch.17 complete-task HTTP contract in spec (decision D) |
+| Challenge task completion (server-validated) | PARTIAL | 20261006180000–080342, complete-task, complete_task_service.dart, battery_hold_to_complete_tile.dart, pgTAP 005/008 | Mock refund: decision C in spec v9; implementation TODO |
 | Deadline processing (FAILED + point grant) | PARTIAL | 20261006190000–074759, process-deadlines, pgTAP 006/007 | IN_PROGRESS only (decision A); lock order fixed in RPC |
 | Points | PARTIAL | point_repository.dart, PointsPage | GRANT on FAILED only; no purchase/cashout/expiry job |
 | History | PARTIAL | history_repository.dart, HistoryPage | No long-press detail (spec 9) |
@@ -28,9 +28,9 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 3. ~~complete-task contract per spec ch.17 (result fields, not HTTP 409 for deadline_exceeded / invalid_state): Edge Function + Flutter service + tests.~~ DONE (2026-10-08).
 4. ~~Long-press guards: background reset; idempotency key at hold start (memory only).~~ DONE (2026-10-08).
 5. ~~use-qr RPC + Edge Function (+ pgTAP).~~ DONE (20261008103000, 2026-10-08).
+6. Mock refund on SUCCESS (decision C): migration `refunded_at`, `complete_task`+QR txn, response `refunded`/`refund_amount`, pgTAP, Flutter if needed.
 
 ## Needs user decision
-- C. Mock refund on SUCCESS: no ledger/field defined yet.
 - E. QR cell assignment per task and reveal algorithm (spec v4/v5).
 - G. Bottom nav order: spec 9 main/points/settings/history/edit vs code main/points/history/edit/settings (light fix).
 - H. Liquid-charge UI (spec v4) vs BatteryPainter; Flutter drawing method undecided.
@@ -44,6 +44,7 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 - 2026-10-07 B (provisional): point GRANT amount = challenge amount 1:1 until user reflects in spec.md (grant logic only in process_deadlines RPC today).
 - 2026-10-08 D: complete-task Edge maps RPC `deadline_exceeded` → HTTP 200 `{ result: "deadline_exceeded" }`; state RPC errors → HTTP 200 `{ result: "invalid_state", error_code }`; other failures keep error_code + 4xx/5xx. Documented in spec.md ch.17 (2026-10-08).
 - 2026-10-08 M: spec ch.17 complete-task HTTP/`result` vs `error_code` wording added per user (changelog v8).
+- 2026-10-08 C: Mock refund on SUCCESS — `complete_task` same txn as SUCCESS+QR; ledger `challenges.refunded_at`; full `challenges.amount`; `challenge_success` adds `refunded`+`refund_amount`; no new Mock Payment Edge (spec v9).
 - 2026-10-07 F: Riverpod phased adoption approved; add flutter_riverpod when first new feature needs it — no mass migration.
 - 2026-10-05 QR at SUCCESS; one active challenge/user; FIFO points 3-month expiry (spec v5).
 - 2026-10-06 Single-RPC pattern for Edge Functions (spec v6/v7).
