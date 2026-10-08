@@ -3,7 +3,7 @@
 Keep this file under ~80 lines. Code and docs/spec.md win over this file if they disagree.
 
 - Last updated: 2026-10-08 (settings + points)
-- Verified at commit: `68a470f` + branch `feat/settings-and-points` (uncommitted) — local checks above; **remote** `jblaaeziumdpkccarjcd`: Flutter Web (`:3000`) point **purchase/exchange smoke OK** (user 2026-10-08)
+- Verified at commit: `5e984d3` on `feat/settings-and-points` — `dart analyze` 0; `flutter test` 69; `supabase test db` 12/218 PASS; **remote** Web point purchase smoke OK (2026-10-08)
 
 ## Features (status: DONE / PARTIAL / TODO / UNKNOWN)
 | Feature | Status | Where (key files) | Notes |
