@@ -16,13 +16,13 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 | QR | DONE | lib/features/qr/*, use-qr, pgTAP 008/009 | PR #1 merged |
 | History | DONE | history_repository.dart, HistoryPage | |
 | Settings (UC26) | DONE | settings_tab.dart, user_profile_repository.dart | user_name + terms (example.com mock) |
-| Points (UC20–23) | PARTIAL | purchase/cashout RPC+Edge, PointsPage, pgTAP 012 | Remote purchase E2E OK (Web); cashout not smoke-tested; expiry **cron** not scheduled |
+| Points (UC20–23) | PARTIAL | purchase/cashout RPC+Edge, PointsPage, pgTAP 012 | Remote purchase E2E OK; cashout Edge 409 `cashout_not_eligible` smoke OK; success cashout needs 7 SUCCESS+7d; expiry cron scheduled |
 
 ## Next items (ordered, one line each)
 1. ~~#1–#9 core challenge/QR/cron/L.~~ DONE
 10. ~~Settings UC26 (user_name, terms link).~~ DONE (2026-10-08, branch).
-11. ~~Points: purchase-points / cashout-points / expiry RPC+Edge.~~ DONE remote deploy + Web purchase smoke (2026-10-08); **pg_cron `process-point-expiry`** still needs approval.
-12. Remote: migration + Edge `purchase-points` / `cashout-points` / `process-point-expiry` DONE 2026-10-08. Optional: `POINT_EXPIRY_CRON_SECRET` + `process-point-expiry-every-minute` cron (see docs/cron-scheduler.md) — **BLOCKED until approved**.
+11. ~~Points remote path.~~ DONE 2026-10-08: deploy, Web purchase, cashout ineligible smoke (`remote-cashout-smoke.ps1`), `process-point-expiry-every-minute` cron.
+12. ~~Remote points/cron checklist.~~ DONE; optional dedicated `POINT_EXPIRY_CRON_SECRET` / Vault `cron_bearer_point_expiry` (falls back to deadlines/auto_start).
 
 ## Needs user decision
 - H. Liquid-charge UI vs BatteryPainter.
@@ -40,4 +40,4 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 - Remote expiry: without `process-point-expiry` cron, GRANT rows expire only via manual cron POST or future schedule.
 
 ## Remote state (project `jblaaeziumdpkccarjcd`, last confirmed 2026-10-08)
-- Migrations through `20261008150000` + `082534`; Edge includes `purchase-points`, `cashout-points`, `process-point-expiry` (2026-10-08). Web purchase smoke OK. Expiry pg_cron not scheduled.
+- Points: migration `082534`, Edge 3, Web purchase OK, cron jobs ×3 (`process-point-expiry-every-minute` added 2026-10-08). PR #3 open.

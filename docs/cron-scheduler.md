@@ -31,7 +31,7 @@ Business logic stays in RPCs (`process_auto_start`, `process_deadlines`). Edge F
 | RPC | `process_point_expiry()` | `GRANT` → `service_role` only | `integer` (grant rows expired) |
 | Edge | `process-point-expiry` | `POST`, `Authorization: Bearer ${POINT_EXPIRY_CRON_SECRET \|\| DEADLINES_CRON_SECRET \|\| AUTO_START_CRON_SECRET}` | `{ "expired_count": number }` |
 
-Cron edges require `SUPABASE_SERVICE_ROLE_KEY` + `SUPABASE_URL` (injected on hosted; set locally for `functions serve`). RPC errors → HTTP `503` `{ "error_code": "temporary_unavailable" }`. Missing/wrong cron secret → `401`. **Remote `pg_cron` job for `process-point-expiry` is not scheduled yet — BLOCKED: USER APPROVAL REQUIRED** (same Vault/pg_net pattern as auto-start/deadlines).
+Cron edges require `SUPABASE_SERVICE_ROLE_KEY` + `SUPABASE_URL` (injected on hosted; set locally for `functions serve`). RPC errors → HTTP `503` `{ "error_code": "temporary_unavailable" }`. Missing/wrong cron secret → `401`. Remote schedules: auto-start, deadlines, point-expiry (1-minute each); apply via `supabase/scripts/schedule-process-point-expiry-cron.sql` when adding to a new project.
 
 Domain (decision A): `process_deadlines` only touches `IN_PROGRESS` challenges past `deadline`. `process_auto_start` only `WAITING` with `auto_start_at <= now()` and `deadline > now()`.
 
@@ -167,6 +167,30 @@ select cron.schedule(
   ) as request_id;
   $$
 );
+
+Point expiry (after Edge `process-point-expiry` deploy). Optional Vault name `cron_bearer_point_expiry`; else same coalesce as deadlines. Script: `supabase/scripts/schedule-process-point-expiry-cron.sql`.
+
+```sql
+-- Or: supabase db query --linked -f supabase/scripts/schedule-process-point-expiry-cron.sql
+select cron.schedule(
+  'process-point-expiry-every-minute',
+  '* * * * *',
+  $$
+  select net.http_post(
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'project_url')
+           || '/functions/v1/process-point-expiry',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || coalesce(
+        (select decrypted_secret from vault.decrypted_secrets where name = 'cron_bearer_point_expiry'),
+        (select decrypted_secret from vault.decrypted_secrets where name = 'cron_bearer_deadlines'),
+        (select decrypted_secret from vault.decrypted_secrets where name = 'cron_bearer_auto_start')
+      )
+    ),
+    body := '{}'::jsonb
+  ) as request_id;
+  $$
+);
 ```
 
 ### 6. Verify (read-only)
@@ -180,6 +204,7 @@ select cron.schedule(
 ```sql
 select cron.unschedule('process-auto-start-every-minute');
 select cron.unschedule('process-deadlines-every-minute');
+select cron.unschedule('process-point-expiry-every-minute');
 ```
 
 ## References
