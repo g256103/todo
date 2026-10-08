@@ -2,8 +2,8 @@
 
 Keep this file under ~80 lines. Code and docs/spec.md win over this file if they disagree.
 
-- Last updated: 2026-10-08
-- Verified at commit: (local) 20261008042013 + pgTAP all green (11 files)
+- Last updated: 2026-10-08 (QR Flutter)
+- Verified at commit: (local) 20261008150000 + pgTAP all green (11 files); remote cron confirmed 2026-10-08 (user)
 
 ## Features (status: DONE / PARTIAL / TODO / UNKNOWN)
 | Feature | Status | Where (key files) | Notes |
@@ -13,13 +13,13 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 | Routine CRUD, N:M, Editor | DONE | lib/features/routines/*, test/routine_repository_test.dart | |
 | Mock Payment (server-side) | DONE | 20261006104500, mock-payment-*, mock_payment_service.dart, pgTAP 003 | |
 | Challenge creation | DONE | 20261005090000, create-challenge, create_challenge_service.dart, pgTAP 002 | |
-| Challenge start (manual / auto share one DB path) | PARTIAL | 20261006140000, start-challenge, process-auto-start, pgTAP 004, docs/cron-scheduler.md | RPC+Edge done; pg_cron jobs remote-only (see doc checklist) |
+| Challenge start (manual / auto share one DB path) | DONE | 20261006140000, start-challenge, process-auto-start, pgTAP 004, docs/cron-scheduler.md | Remote pg_cron 1 min + Vault/pg_net (2026-10-08) |
 | Challenge task completion (server-validated) | DONE | 20261006180000–08034442, complete-task, complete_task_service.dart, battery_hold_to_complete_tile.dart, pgTAP 005/008 | Mock refund on SUCCESS (decision C, spec v9) |
-| Deadline processing (FAILED + point grant) | PARTIAL | 20261006190000–074759, process-deadlines, pgTAP 006/007, docs/cron-scheduler.md | IN_PROGRESS only (decision A); cron schedule remote-only |
+| Deadline processing (FAILED + point grant) | DONE | 20261006190000–074759, process-deadlines, pgTAP 006/007, docs/cron-scheduler.md | IN_PROGRESS only (decision A); remote cron 1 min (2026-10-08) |
 | Points | PARTIAL | point_repository.dart, PointsPage | GRANT on FAILED only; no purchase/cashout/expiry job |
-| History | PARTIAL | history_repository.dart, HistoryPage | No long-press detail (spec 9) |
+| History | DONE | history_repository.dart, HistoryPage (home_page.dart) | List: date/amount/result; long-press detail uses task_name_snapshot (spec 9) |
 | Settings | PARTIAL | home_page.dart (_SettingsPage) | Logout only; no user_name / terms |
-| QR | PARTIAL | 20261008103000, use-qr, qr_codes, pgTAP 008/009 | use_qr RPC+Edge DONE; セル割当・reveal・Flutter読取は決定E待ち |
+| QR | DONE | lib/features/qr/*, use_qr_service.dart, mock_payment_home_page.dart, pgTAP 008/009 | IN_PROGRESS preview+reveal; SUCCESS claim QR+puzzle; qr_codes SELECT; camera/manual scan→use-qr |
 
 ## Next items (ordered, one line each)
 1. ~~process_deadlines: IN_PROGRESS only; pgTAP 007 mixed WAITING/IN_PROGRESS.~~ DONE (20261007074123).
@@ -29,14 +29,12 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 4. ~~Long-press guards: background reset; idempotency key at hold start (memory only).~~ DONE (2026-10-08).
 5. ~~use-qr RPC + Edge Function (+ pgTAP).~~ DONE (20261008103000, 2026-10-08).
 6. ~~Mock refund on SUCCESS (decision C): migration `refunded_at`, `complete_task`+QR txn, response `refunded`/`refund_amount`, pgTAP, Flutter if needed.~~ DONE (20261008034442).
-7. ~~Cron design + local runbook (pg_cron/pg_net extensions, verify_jwt, invoke script).~~ DONE (20261008150000, docs/cron-scheduler.md). **Remote execute:** same doc § Remote checklist — BLOCKED until approval.
+7. ~~Cron design + local runbook + remote rollout (extensions, secrets, deploy, Vault, cron.schedule).~~ DONE (20261008150000, docs/cron-scheduler.md; remote 2026-10-08).
 8. ~~Overdue never-started WAITING blocks new create (L, decision c): index + `create_challenge` active check.~~ DONE (20261008042013, spec v10, pgTAP 011).
+9. ~~QR Flutter: IN_PROGRESS preview + reveal; SUCCESS claim QR + puzzle; camera + use-qr.~~ DONE (2026-10-08).
 
 ## Needs user decision
-- E. QR cell assignment per task and reveal algorithm (spec v4/v5).
-- G. Bottom nav order: spec 9 main/points/settings/history/edit vs code main/points/history/edit/settings (light fix).
 - H. Liquid-charge UI (spec v4) vs BatteryPainter; Flutter drawing method undecided.
-- I. Cron remote rollout (`db push` extensions, `secrets set`, `functions deploy`, Vault + `cron.schedule`) — design in docs/cron-scheduler.md; execution approval required.
 - J. Purchase catalog; cashout “1 week+ continuity” definition.
 - K. Server time offset; auth token refresh design.
 
@@ -48,16 +46,21 @@ Keep this file under ~80 lines. Code and docs/spec.md win over this file if they
 - 2026-10-08 M: spec ch.17 complete-task HTTP/`result` vs `error_code` wording added per user (changelog v8).
 - 2026-10-08 C: Mock refund on SUCCESS — `complete_task` same txn as SUCCESS+QR; ledger `challenges.refunded_at`; full `challenges.amount`; `challenge_success` adds `refunded`+`refund_amount`; no new Mock Payment Edge (spec v9).
 - 2026-10-07 F: Riverpod phased adoption approved; add flutter_riverpod when first new feature needs it — no mass migration.
+- 2026-10-08 G: Bottom nav order follows spec ch.9 — メイン / ポイント / 設定 / 履歴 / 編集 (`TabbedHomePage`).
+- 2026-10-08 E: QR cells/reveal — two-stage UI (preview IN_PROGRESS / real token SUCCESS); assignment = mock `qrUtils` (Mulberry32 seed 20261004, round-robin, finder on last task); no pixel-match preview vs final (spec v11 ch.8).
 - 2026-10-05 QR at SUCCESS; one active challenge/user; FIFO points 3-month expiry (spec v5).
 - 2026-10-06 Single-RPC pattern for Edge Functions (spec v6/v7).
 
 ## Known issues / flaky tests
-- 2026-10-08 baseline: dart analyze 0 issues; flutter test 61 passed, 0 failed.
+- 2026-10-08 baseline: dart analyze 0 issues; flutter test 68 passed, 0 failed.
 - supabase test db (local): 11 files; run `supabase db reset` then `supabase test db` (migrations through 20261008042013).
 - Cron Edge deno tests: `deno test --allow-env` in process-auto-start / process-deadlines dirs.
 - Remote: SUCCESS challenges created before 20261007080340 may lack `qr_codes` rows; backfill needs approval (one-off migration or ops), not done in this change.
 - Lock timeout (SQLSTATE `55P03`, PG message e.g. `canceling statement due to lock timeout`): migrations set `lock_timeout` but no RPC maps to `temporary_unavailable`; `_shared.dbErrorCode` uses `message` only → single-RPC Edges (complete-task, use-qr, mock-payment-*, start/create-challenge) likely HTTP 500. Spec ch. Mock Payment: 503 `temporary_unavailable`. Cron edges map any RPC error to 503. Cross-cutting fix needs approval.
 
-## Remote state (update only after user confirms)
-- Last applied remote migration: spec v5 says 0001–0007 applied; 0008+ unconfirmed
-- Deployed functions: unknown
+## Remote state (project `jblaaeziumdpkccarjcd`, confirmed 2026-10-08)
+- Last applied remote migration: `20261008150000_cron_pg_extensions.sql` (through `20261008042013` L(c), `use_qr`, refund, complete_task, process_deadlines)
+- Edge secrets: `AUTO_START_CRON_SECRET` set; `DEADLINES_CRON_SECRET` unset (falls back to auto-start)
+- Deployed functions: create-challenge, mock-payment-*, start-challenge, **complete-task**, **use-qr** (`verify_jwt=true`), **process-auto-start**, **process-deadlines** (`verify_jwt=false` on cron pair)
+- Cron: Vault `project_url`, `cron_bearer_auto_start`; jobs `process-auto-start-every-minute`, `process-deadlines-every-minute` (`* * * * *`); pg_net HTTP 200 verified
+- Remote E2E smoke 2026-10-08: Edge SUCCESS+refund (`complete-task`), cron FAILED+GRANT (short-deadline SQL fixture; `deadline` immutable after create)

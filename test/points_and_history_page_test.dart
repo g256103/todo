@@ -44,9 +44,7 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(
-            body: PointsPage(repository: repo),
-          ),
+          home: Scaffold(body: PointsPage(repository: repo)),
         ),
       );
       await tester.pumpAndSettle();
@@ -60,14 +58,14 @@ void main() {
   });
 
   group('HistoryPage', () {
-    testWidgets('displays empty state when no challenge history', (tester) async {
+    testWidgets('displays empty state when no challenge history', (
+      tester,
+    ) async {
       final repo = _FakeHistoryRepository(history: const []);
 
       await tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(
-            body: HistoryPage(repository: repo),
-          ),
+          home: Scaffold(body: HistoryPage(repository: repo)),
         ),
       );
       await tester.pumpAndSettle();
@@ -75,7 +73,9 @@ void main() {
       expect(find.text('まだチャレンジ履歴がありません。'), findsOneWidget);
     });
 
-    testWidgets('displays challenge item with success status and tasks', (tester) async {
+    testWidgets('lists summary only; long-press opens snapshot detail', (
+      tester,
+    ) async {
       final item = ChallengeHistoryItem(
         id: 'c-1',
         amount: 1000,
@@ -101,17 +101,22 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(
-            body: HistoryPage(repository: repo),
-          ),
+          home: Scaffold(body: HistoryPage(repository: repo)),
         ),
       );
       await tester.pumpAndSettle();
 
       expect(find.text('¥1000 コミット'), findsOneWidget);
       expect(find.text('SUCCESS'), findsOneWidget);
+      expect(find.text('完了済みタスク'), findsNothing);
+      expect(find.text('未完了タスク'), findsNothing);
+
+      await tester.longPress(find.text('¥1000 コミット'));
+      await tester.pumpAndSettle();
+
       expect(find.text('完了済みタスク'), findsOneWidget);
       expect(find.text('未完了タスク'), findsOneWidget);
+      expect(find.text('閉じる'), findsOneWidget);
     });
   });
 }

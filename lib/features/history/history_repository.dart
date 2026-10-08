@@ -84,7 +84,9 @@ class HistoryRepository {
 
     final challengesResponse = await _client
         .from('challenges')
-        .select()
+        .select(
+          'id, amount, status, created_at, deadline, started_at, finished_at',
+        )
         .eq('user_id', user.id)
         .order('created_at', ascending: false);
 
@@ -94,12 +96,15 @@ class HistoryRepository {
 
     if (challengeRows.isEmpty) return const [];
 
-    final challengeIds =
-        challengeRows.map((c) => c['id'] as String).toList(growable: false);
+    final challengeIds = challengeRows
+        .map((c) => c['id'] as String)
+        .toList(growable: false);
 
     final tasksResponse = await _client
         .from('challenge_tasks')
-        .select()
+        .select(
+          'id, challenge_id, task_name_snapshot, status, completed_at, sort_order',
+        )
         .inFilter('challenge_id', challengeIds)
         .order('sort_order', ascending: true);
 
@@ -112,9 +117,11 @@ class HistoryRepository {
           .add(ChallengeHistoryTask.fromJson(json));
     }
 
-    return challengeRows.map((c) {
-      final id = c['id'] as String;
-      return ChallengeHistoryItem.fromJson(c, taskMap[id] ?? const []);
-    }).toList(growable: false);
+    return challengeRows
+        .map((c) {
+          final id = c['id'] as String;
+          return ChallengeHistoryItem.fromJson(c, taskMap[id] ?? const []);
+        })
+        .toList(growable: false);
   }
 }

@@ -4,6 +4,11 @@ import '../../services/complete_task_service.dart';
 import '../../services/create_challenge_service.dart';
 import '../../services/mock_payment_service.dart';
 import '../../services/start_challenge_service.dart';
+import '../../services/use_qr_service.dart';
+import '../qr/claim_qr_panel.dart';
+import '../qr/qr_repository.dart';
+import '../qr/qr_scan_page.dart';
+import '../qr/revealing_qr_widget.dart';
 import '../routines/routine_repository.dart';
 import '../tasks/battery_hold_to_complete_tile.dart';
 import '../tasks/task_repository.dart';
@@ -19,6 +24,10 @@ class MockPaymentHomePage extends StatefulWidget {
     this.taskLoader,
     this.routineRepository,
     this.routineLoader,
+    this.qrRepository,
+    this.qrLoader,
+    this.useQrService,
+    this.skipQrRevealAnimation = false,
   });
 
   final MockPaymentService? paymentService;
@@ -29,6 +38,11 @@ class MockPaymentHomePage extends StatefulWidget {
   final Future<List<Task>> Function()? taskLoader;
   final RoutineRepository? routineRepository;
   final Future<List<Routine>> Function()? routineLoader;
+  final QrRepository? qrRepository;
+  final Future<QrCodeRecord?> Function(String challengeId)? qrLoader;
+  final UseQrService? useQrService;
+  /// When true, skips IN_PROGRESS cell reveal timing (for widget tests).
+  final bool skipQrRevealAnimation;
 
   @override
   State<MockPaymentHomePage> createState() => _MockPaymentHomePageState();
@@ -49,6 +63,8 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
   late final CreateChallengeService _challengeService;
   late final StartChallengeService _startChallengeService;
   late final CompleteTaskService _completeTaskService;
+  QrRepository? _qrRepository;
+  UseQrService? _useQrService;
   TaskRepository? _taskRepository;
   RoutineRepository? _routineRepository;
   final _selectedTaskIds = <String>{};
@@ -65,6 +81,10 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
   String? _errorMessage;
   String? _activeHoldingTaskId;
   Map<String, String> _taskStatuses = {};
+  int? _revealTaskIndex;
+  bool _pendingChallengeSuccess = false;
+  QrCodeRecord? _qrRecord;
+  bool _isQrActionInProgress = false;
 
   @override
   void initState() {
@@ -74,6 +94,8 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
     _startChallengeService =
         widget.startChallengeService ?? StartChallengeService();
     _completeTaskService = widget.completeTaskService ?? CompleteTaskService();
+    _qrRepository = widget.qrRepository;
+    _useQrService = widget.useQrService;
     _taskRepository = widget.taskRepository;
     _routineRepository = widget.routineRepository;
     _loadSelectionData();
@@ -171,14 +193,17 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
         });
         return false;
       }
+      final sortedTasks = _sortedChallengeTasks();
+      final taskIndex = sortedTasks.indexWhere((t) => t.id == challengeTaskId);
       setState(() {
         _taskStatuses[challengeTaskId] = 'COMPLETED';
         _errorMessage = null;
-        if (response.result == 'challenge_success' ||
-            _taskStatuses.values.every((s) => s == 'COMPLETED')) {
-          _flow = _PaymentFlow.challengeSuccess;
-        }
+        _revealTaskIndex = taskIndex >= 0 ? taskIndex : null;
+        _pendingChallengeSuccess = response.result == 'challenge_success';
       });
+      if (_pendingChallengeSuccess && widget.skipQrRevealAnimation) {
+        await _onAllRevealFinished();
+      }
       return true;
     } on CompleteTaskApiException catch (error) {
       if (mounted) {
@@ -272,7 +297,90 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
       _errorMessage = null;
       _activeHoldingTaskId = null;
       _taskStatuses = {};
+      _revealTaskIndex = null;
+      _pendingChallengeSuccess = false;
+      _qrRecord = null;
     });
+  }
+
+  List<ChallengeTask> _sortedChallengeTasks() {
+    final tasks = _challenge?.challengeTasks ?? const <ChallengeTask>[];
+    return List<ChallengeTask>.from(tasks)
+      ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+  }
+
+  List<String> _taskStatusesInSortOrder() {
+    return _sortedChallengeTasks()
+        .map((t) => _taskStatuses[t.id] ?? t.status)
+        .toList(growable: false);
+  }
+
+  void _onRevealFinished(int taskIndex) {
+    if (_revealTaskIndex == taskIndex) {
+      setState(() => _revealTaskIndex = null);
+    }
+  }
+
+  Future<void> _onAllRevealFinished() async {
+    if (!_pendingChallengeSuccess) return;
+    final challengeId = _challenge?.id ?? _startedChallenge?.id;
+    if (challengeId == null) return;
+    try {
+      final record = widget.qrLoader != null
+          ? await widget.qrLoader!(challengeId)
+          : await (_qrRepository ?? widget.qrRepository ?? QrRepository())
+              .fetchByChallengeId(challengeId);
+      if (!mounted) return;
+      setState(() {
+        _qrRecord = record;
+        _flow = _PaymentFlow.challengeSuccess;
+        _pendingChallengeSuccess = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'QRコードを取得できませんでした。';
+        _pendingChallengeSuccess = false;
+      });
+    }
+  }
+
+  Future<void> _useQrToken(String token) async {
+    if (_isQrActionInProgress || _qrRecord?.isUsed == true) return;
+    setState(() {
+      _isQrActionInProgress = true;
+      _errorMessage = null;
+    });
+    try {
+      final response = await (_useQrService ?? UseQrService()).use(token: token);
+      if (!mounted) return;
+      if (response.result == 'used') {
+        setState(() {
+          _qrRecord = _qrRecord != null
+              ? QrCodeRecord(
+                  id: _qrRecord!.id,
+                  challengeId: _qrRecord!.challengeId,
+                  token: _qrRecord!.token,
+                  status: 'USED',
+                  usedAt: response.qrCode?.usedAt ?? DateTime.now(),
+                )
+              : null;
+        });
+        _showMessage('QRを利用しました。');
+      }
+    } on UseQrApiException catch (error) {
+      if (mounted) setState(() => _errorMessage = error.userMessage);
+    } finally {
+      if (mounted) setState(() => _isQrActionInProgress = false);
+    }
+  }
+
+  Future<void> _openQrScanner() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (context) => QrScanPage(onTokenScanned: _useQrToken),
+      ),
+    );
   }
 
   @override
@@ -574,11 +682,22 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
 
   Widget _buildInProgress() {
     final challenge = _startedChallenge!;
-    final tasks = _challenge?.challengeTasks ?? const [];
+    final tasks = _sortedChallengeTasks();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Center(
+          child: RevealingQrWidget(
+            challengeId: challenge.id,
+            taskStatuses: _taskStatusesInSortOrder(),
+            justApprovedTaskIndex: _revealTaskIndex,
+            onRevealFinished: _onRevealFinished,
+            onAllCompletedFinished: _onAllRevealFinished,
+            instantReveal: widget.skipQrRevealAnimation,
+          ),
+        ),
+        const SizedBox(height: 12),
         _SectionCard(
           title: 'Challenge進行中',
           child: Column(
@@ -639,6 +758,9 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
   Widget _buildChallengeSuccess() {
     final challenge = _challenge;
     final amount = challenge?.amount ?? _startedChallenge?.amount ?? 1000;
+    final qr = _qrRecord;
+    final qrStatus = qr?.status ?? 'AVAILABLE';
+    final canUseQr = qr != null && qr.isAvailable && !_isQrActionInProgress;
 
     return _SectionCard(
       title: 'チャレンジ達成！ 🎉',
@@ -657,38 +779,46 @@ class _MockPaymentHomePageState extends State<MockPaymentHomePage> {
             style: const TextStyle(fontSize: 14),
           ),
           const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.green.shade50,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.green.shade200),
+          if (qr != null)
+            ClaimQrPanel(
+              token: qr.token,
+              amount: amount,
+              qrStatus: qrStatus,
+              assembleImmediately: widget.skipQrRevealAnimation,
+            )
+          else
+            const Text(
+              'QRコードを読み込めませんでした。',
+              style: TextStyle(color: Colors.red),
             ),
-            child: const Row(
-              children: [
-                Icon(Icons.qr_code_2, size: 36, color: Colors.green),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'QRコード開放完了',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green,
-                        ),
-                      ),
-                      Text(
-                        '実店舗や連携リーダーで読み取って利用できます。',
-                        style: TextStyle(fontSize: 11, color: Colors.black54),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+          const SizedBox(height: 16),
+          if (canUseQr) ...[
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () => _useQrToken(qr.token),
+                child: _isQrActionInProgress
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('QRを利用する'),
+              ),
             ),
-          ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _openQrScanner,
+                child: const Text('カメラで読み取って利用'),
+              ),
+            ),
+          ] else if (qr?.isUsed == true)
+            const Text(
+              'このQRは利用済みです。',
+              style: TextStyle(color: Colors.grey, fontSize: 13),
+            ),
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,

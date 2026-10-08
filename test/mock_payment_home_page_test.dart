@@ -7,6 +7,7 @@ import 'package:todo/services/complete_task_service.dart';
 import 'package:todo/services/create_challenge_service.dart';
 import 'package:todo/services/mock_payment_service.dart';
 import 'package:todo/services/start_challenge_service.dart';
+import 'package:todo/features/qr/qr_repository.dart';
 
 class _FakeInvoker implements MockPaymentFunctionInvoker {
   _FakeInvoker({
@@ -112,10 +113,20 @@ class _FixedKeyGenerator implements IdempotencyKeyGenerator {
   String generate() => '11111111-1111-4111-8111-111111111111';
 }
 
+void _tallViewport(WidgetTester tester) {
+  tester.view.physicalSize = const Size(800, 1400);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(() {
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+}
+
 void main() {
   testWidgets('creates and confirms payment through the service', (
     tester,
   ) async {
+    _tallViewport(tester);
     final invoker = _FakeInvoker();
     final paymentService = MockPaymentService(
       invoker: invoker,
@@ -149,6 +160,13 @@ void main() {
             challengeService: challengeService,
             startChallengeService: startChallengeService,
             completeTaskService: completeTaskService,
+            qrLoader: (_) async => const QrCodeRecord(
+              id: 'qr-1',
+              challengeId: '22222222-2222-4222-8222-222222222222',
+              token: 'claim-token-abc',
+              status: 'AVAILABLE',
+            ),
+            skipQrRevealAnimation: true,
             taskLoader: () async => [task],
             routineLoader: () async => const <Routine>[],
           ),
@@ -188,6 +206,7 @@ void main() {
     expect(invoker.calls.last.name, 'start-challenge');
 
     // タスクを完了する（アクセシビリティダイアログ経由で完了）
+    await tester.ensureVisible(find.byIcon(Icons.accessibility));
     await tester.tap(find.byIcon(Icons.accessibility));
     await tester.pumpAndSettle();
     expect(find.text('タスクの完了'), findsOneWidget);
@@ -207,6 +226,7 @@ void main() {
   testWidgets('shows message when complete-task returns deadline_exceeded', (
     tester,
   ) async {
+    _tallViewport(tester);
     final invoker = _FakeInvoker(completeTaskResult: 'deadline_exceeded');
     final paymentService = MockPaymentService(
       invoker: invoker,
@@ -240,6 +260,13 @@ void main() {
             challengeService: challengeService,
             startChallengeService: startChallengeService,
             completeTaskService: completeTaskService,
+            qrLoader: (_) async => const QrCodeRecord(
+              id: 'qr-1',
+              challengeId: '22222222-2222-4222-8222-222222222222',
+              token: 'claim-token-abc',
+              status: 'AVAILABLE',
+            ),
+            skipQrRevealAnimation: true,
             taskLoader: () async => [task],
             routineLoader: () async => const <Routine>[],
           ),
@@ -257,6 +284,7 @@ void main() {
     await tester.tap(find.text('チャレンジ開始'));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byIcon(Icons.accessibility));
     await tester.tap(find.byIcon(Icons.accessibility));
     await tester.pumpAndSettle();
     await tester.tap(find.text('完了する'));
@@ -268,6 +296,7 @@ void main() {
   testWidgets(
     'does not treat complete-task success when page unmounted mid-request',
     (tester) async {
+      _tallViewport(tester);
       final invoker = _FakeInvoker(
         completeTaskDelay: const Duration(seconds: 1),
       );
@@ -320,7 +349,8 @@ void main() {
       await tester.tap(find.text('チャレンジ開始'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.accessibility));
+      await tester.ensureVisible(find.byIcon(Icons.accessibility));
+    await tester.tap(find.byIcon(Icons.accessibility));
       await tester.pumpAndSettle();
       await tester.tap(find.text('完了する'));
       await tester.pump(const Duration(milliseconds: 100));

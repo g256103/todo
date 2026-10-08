@@ -26,7 +26,7 @@ class TabbedHomePage extends StatefulWidget {
 }
 
 class _TabbedHomePageState extends State<TabbedHomePage> {
-  static const _titles = ['メイン', 'ポイント', '履歴', '編集', '設定'];
+  static const _titles = ['メイン', 'ポイント', '設定', '履歴', '編集'];
   int _selectedIndex = 0;
   late final List<Widget> _pages;
 
@@ -36,9 +36,9 @@ class _TabbedHomePageState extends State<TabbedHomePage> {
     _pages = [
       const MockPaymentHomePage(),
       const PointsPage(),
+      _SettingsPage(authService: widget.authService, session: widget.session),
       const HistoryPage(),
       const TaskEditorPage(),
-      _SettingsPage(authService: widget.authService, session: widget.session),
     ];
   }
 
@@ -71,16 +71,16 @@ class _TabbedHomePageState extends State<TabbedHomePage> {
                 selectedIcon: Icon(Icons.stars),
                 label: 'ポイント',
               ),
+              NavigationDestination(
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings),
+                label: '設定',
+              ),
               NavigationDestination(icon: Icon(Icons.history), label: '履歴'),
               NavigationDestination(
                 icon: Icon(Icons.edit_outlined),
                 selectedIcon: Icon(Icons.edit),
                 label: '編集',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings),
-                label: '設定',
               ),
             ],
           ),
@@ -714,17 +714,92 @@ class _HistoryPageState extends State<HistoryPage> {
                   );
                 }
                 final item = _history[index - 1];
-                return _ChallengeHistoryCard(item: item);
+                return _ChallengeHistoryCard(
+                  item: item,
+                  onShowDetail: () =>
+                      _showChallengeHistoryDetail(context, item),
+                );
               },
             ),
+    );
+  }
+
+  Future<void> _showChallengeHistoryDetail(
+    BuildContext context,
+    ChallengeHistoryItem item,
+  ) async {
+    final dateStr =
+        '${item.createdAt.year}/${item.createdAt.month.toString().padLeft(2, '0')}/${item.createdAt.day.toString().padLeft(2, '0')}';
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('$dateStr · ¥${item.amount}'),
+        content: SingleChildScrollView(
+          child: _ChallengeHistoryTaskSnapshotList(tasks: item.tasks),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('閉じる'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChallengeHistoryTaskSnapshotList extends StatelessWidget {
+  const _ChallengeHistoryTaskSnapshotList({required this.tasks});
+
+  final List<ChallengeHistoryTask> tasks;
+
+  @override
+  Widget build(BuildContext context) {
+    if (tasks.isEmpty) {
+      return const Text('タスクのスナップショットがありません。');
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final task in tasks)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  task.isCompleted ? Icons.check_circle : Icons.cancel,
+                  size: 18,
+                  color: task.isCompleted ? Colors.green : Colors.red,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    task.taskNameSnapshot,
+                    style: TextStyle(
+                      color: task.isCompleted
+                          ? Colors.green.shade800
+                          : Colors.red.shade800,
+                      decoration: task.isCompleted
+                          ? TextDecoration.lineThrough
+                          : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }
 
 class _ChallengeHistoryCard extends StatelessWidget {
-  const _ChallengeHistoryCard({required this.item});
+  const _ChallengeHistoryCard({required this.item, required this.onShowDetail});
 
   final ChallengeHistoryItem item;
+  final VoidCallback onShowDetail;
 
   Color _statusColor() {
     switch (item.status) {
@@ -748,77 +823,56 @@ class _ChallengeHistoryCard extends StatelessWidget {
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  dateStr,
-                  style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
+      child: InkWell(
+        onLongPress: onShowDetail,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    dateStr,
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
                   ),
-                  decoration: BoxDecoration(
-                    color: _statusColor().withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    item.status,
-                    style: TextStyle(
-                      color: _statusColor(),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 11,
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _statusColor().withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      item.status,
+                      style: TextStyle(
+                        color: _statusColor(),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '¥${item.amount} コミット',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            if (item.tasks.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              const Divider(height: 1),
+                ],
+              ),
               const SizedBox(height: 8),
-              for (final task in item.tasks)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
-                    children: [
-                      Icon(
-                        task.isCompleted ? Icons.check_circle : Icons.cancel,
-                        size: 16,
-                        color: task.isCompleted ? Colors.green : Colors.red,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          task.taskNameSnapshot,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: task.isCompleted
-                                ? Colors.green.shade800
-                                : Colors.red.shade800,
-                            decoration: task.isCompleted
-                                ? TextDecoration.lineThrough
-                                : null,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+              Text(
+                '¥${item.amount} コミット',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
                 ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '長押しでタスク詳細',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              ),
             ],
-          ],
+          ),
         ),
       ),
     );

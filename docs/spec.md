@@ -364,15 +364,70 @@ Flutterから`user_id`、`status`、`paid_at`、`created_at`、`updated_at`、Pa
 - [ ] ポイント画面では保有ポイントと進捗を表示する。
 - [ ] 進捗表示として「n pt」「4/7」「あと3日」等を使用する。
 
-## 8. QR仕様（v2で更新）
+## 8. QR仕様（v2で更新、v11でセル割当・revealを確定）
 
 - [ ] 成功後にQRを利用可能にする。
 - [ ] 実際のカメラでQRを読み取れるようにする。
-- [ ] QRにはランダムなtoken等を持たせ、サーバーで検証する。トークン生成にはcrypto.randomUUID()等、暗号学的に安全な乱数を使用する。
+- [ ] QRにはランダムなtoken等を持たせ、サーバーで検証する。トークン生成にはcrypto.randomUUID()等、暗号学的に安全な乱数を使用する（DB既定は`qr_codes.token`）。
 - [ ] QRはAVAILABLEから一度利用するとUSED。
 - [ ] 同じQRの二重利用を防止する。
-- [ ] SUCCESS前は利用不可。
+- [ ] SUCCESS前は利用不可（`use_qr`は`qr_codes`行とChallengeがSUCCESSであることを要求する）。
 - [ ] QR利用時はサーバーでChallenge状態とQR状態を確認する。
+
+### 8.1 二段構え（決定E・案A）
+
+v5①（トークンはSUCCESS時のみDB作成）とv4（タスク完了ごとのセル開放演出）を両立する。
+
+| フェーズ | 画面 | 内容 |
+|---|---|---|
+| `IN_PROGRESS` | チャレンジ実行画面（上部の統合QRエリア） | **プレビュー演出のみ**。読取・`use_qr`不可。 |
+| `SUCCESS`以降 | 成功画面（または同等の成功モーダル） | **本物のtoken**で生成したQR。カメラ読取・`use_qr`可。 |
+
+- 進行中プレビューと完成QRの**モジュール配置のピクセル一致は要求しない**。SUCCESS遷移時に本物QRへ差し替え、別演出（8.4）で達成感を出す。
+- 長押し4秒中はQRを変化させない（v4・4章）。
+
+### 8.2 プレビュー用ペイロード（IN_PROGRESS）
+
+- 本token・`qr_codes`行をクライアントに渡さない。
+- プレビューQRの符号化内容は次の固定形式とする（`challenge_id`はcanonical lowercase UUID）:
+  - `https://paypay-commit.mock/preview?challenge_id={challenge_id}`
+- 誤読・誤用防止: プレビューURLは`use_qr`で検証されない（本番claim URLとパスを分ける）。ECCは**レベルM**（モック `docs/mock/code/src/utils/qrUtils.ts` と同じ）。
+
+### 8.3 セル割当（タスク→QRモジュール）
+
+`challenge_tasks`を`sort_order`昇順に並べたインデックス`0 … n-1`を**タスク番号**とする。割当はプレビューQRの黒モジュールに対して行う（規範アルゴリズムはモック `qrUtils.ts` の`generateQRModel`と同等）。
+
+1. プレビューQRの全黒モジュールを列挙する。
+2. **位置検出パターン**（各コーナー7×7、モジュール座標がfinderに入るもの）を除いた黒モジュールを、決定的PRNG（Mulberry32、**seed = `20261004`固定**）でシャッフルする。
+3. シャッフル後の非finderモジュールを、先頭から**タスク番号へラウンドロビン**（`idx % n`）で割り当てる。
+4. **finderモジュールはすべて最終タスク**（タスク番号`n-1`）に割り当てる。
+5. 各タスク内の開放順序: 非finderを先、finderを後（同一タスク内でfinderは最後に開く）。
+
+タスク数が黒モジュール数より多い場合は、割当ゼロのタスクがあり得る（開放アニメーション0件）。タスク数が1のときはfinderも非finderもその1タスクに属する。
+
+### 8.4 Revealアニメーション（IN_PROGRESS）
+
+`complete-task`がHTTP 200かつ`result`が`completed`または`challenge_success`で当該タスクが`COMPLETED`になった**後**に、そのタスクに割り当てたセルを開く。
+
+- 1タスクあたりの開放時間の目安: **約800ms**（割当セル数で等分割、1ステップ最低約6ms）。
+- 各セル開放時: 約120msの薄緑ハイライト後、黒（`#1C1C1E`）で表示。未開放セルは薄いグレー点（不透明度おおよそ8%）。
+- **最終タスク**の割当セルをすべて開いた直後: QR全体の軽い光り演出**1回・約400ms**。
+- 既に`COMPLETED`のタスクは、画面再表示時に割当セルを即時表示済みとする（アニメーションは今回承認されたタスクのみ）。
+
+`result`が`challenge_success`のとき: 上記の最終タスク開放・光り演出の後、**成功画面へ遷移**し8.5を表示する（プレビューエリアを本物QRに差し替え）。
+
+### 8.5 本物QR（SUCCESS以降）
+
+- `qr_codes.token`は`complete_task`のSUCCESSトランザクションで作成済み（v5①・7章）。クライアントは`challenge_success`後に**RLSで本人の`qr_codes`をSELECT**するか、将来のAPI拡張でtokenを受け取る（いずれもSUCCESS後のみ）。
+- 符号化ペイロード（モック準拠）:
+  - `https://paypay-commit.mock/claim?token={token}&amount={amount}&status=VERIFIED`
+  - `amount`は`challenges.amount`（整数円）。`token`はURLエンコードする。
+- 静寂域（quiet zone）を確保し、実機カメラで読み取れること（モック `SuccessView.tsx` と同程度のmargin）。
+- 成功画面の演出: **4×4タイルのパズル組み立て**、または同等の短い組み立てアニメーション（モック `SuccessView.tsx` を参考）。その後「QR利用」等で`use-qr`を呼ぶ。
+
+### 8.6 実装メモ（Flutter・別タスク）
+
+チャレンジ実行画面にプレビューQR（8.2〜8.4、`docs/mock/code`の`RevealingQR`/`qrUtils`をUI参照のみで移植）。`complete_task`成功で当該タスクのrevealをトリガー。`challenge_success`後に`qr_codes`からtokenを取得し成功画面で8.5のclaim QRを描画。カメラ読取と`use-qr` EdgeはSUCCESSかつAVAILABLEのみ。DB migration・RPC変更は本決定では不要（token返却をレスポンスに含める拡張は任意）。
 
 ## 9. UI・画面（v2で更新）
 
@@ -381,6 +436,7 @@ Flutterから`user_id`、`status`、`paid_at`、`created_at`、`updated_at`、Pa
 - [ ] 編集：タスク／ルーティーンを管理。左で編集・削除、右で登録する方針。
 - [ ] ルーティーン長押しで含まれるタスクを確認。
 - [ ] チャレンジ中：完了タスクを緑、未完了タスクを白。
+- [ ] チャレンジ中（IN_PROGRESS）：画面上部にプレビューQRを表示し、タスク完了承認後に8章のrevealでセルを開放する（読取不可）。
 - [ ] チャレンジ中のタスク完了操作は4秒長押し。長押し中はバッテリーが充電されるように満ちていくアニメーションを表示する（単色＋満タン時のみ軽い光の演出。CustomPainterで描画）。
 - [ ] 支援機能（スクリーンリーダー等）利用時は、長押しUIと並行して確認ダイアログによる代替完了操作を提供する。
 - [ ] 履歴：日付・チャレンジ額・結果。長押しで詳細。
@@ -795,7 +851,7 @@ lib/
 
 ### 未確定(勝手に仕様化しない)
 
-- QRのセルをタスクごとに割り当てる具体的な方式(モックの方式をそのまま採用するか)
+- ~~QRのセルをタスクごとに割り当てる具体的な方式~~ → **決定E（v11・8章）**
 - 液体の波の描画をFlutterでどう実装するか
 
 
@@ -865,7 +921,7 @@ lib/
 - **`point_transactions.type` の値**: 仕様書に値の定義がない。現在は `GRANT` / `PURCHASE` / `CASHOUT` / `EXPIRE`
 - **金額とポイントの換算**: 仕様書に記載がない。付与額とChallenge金額の関係、`cashouts.cash_amount` の式チェックは未設定
 - **開始前の取り消し**: 仕様書2章に「取り消しは取り消し完了とする」とあるが、対応する状態・遷移の定義がない。現在は WAITING → FAILED を禁止
-- **QRセルの割り当て方式**(v4から継続): 進行中の表示は仮パターンで、読み取れるQRはSUCCESS時に作成される
+- ~~**QRセルの割り当て方式**~~ → **決定E（v11・8章）**
 - **未作成のもの**: Challenge作成・完了・失効などのサーバー関数、pg_cronのジョブ、`idempotency_keys` の期限切れ削除
 
 ## 変更記録 v6(2026-10-06): Mock Payment API仕様の確定
@@ -963,3 +1019,22 @@ lib/
 | 2章・v5③ | 新規作成の制限は「進行中または期限内未開始」のみ |
 | 10章・DB | `challenges_one_active_per_user` を `challenges_one_in_progress_per_user` に置換 |
 | 12章 | 遷移図は変更なし（`WAITING` → `FAILED` 禁止を維持） |
+
+## 変更記録 v11(2026-10-08): QRセル割当・reveal（決定E・案A）
+
+### 変更前
+- v4・v5で「進行中は仮パターン／tokenはSUCCESS時のみ」と「タスクごとにセル開放」が並立していたが、割当アルゴリズム・SUCCESS時の差し替え・読取可能タイミングが未記載だった。
+
+### 変更後
+- **二段構え**: `IN_PROGRESS`はプレビューQR（固定プレビューURL＋`qrUtils`同等の割当・reveal）。`SUCCESS`以降は`qr_codes.token`のclaim QRと別演出。プレビューと本物のピクセル一致は不要。
+- 規範: Mulberry32 seed `20261004`、非finderのラウンドロビン、finderは最終タスク、reveal約800ms／最終光り約400ms、claimペイロードURL形式。
+
+### 影響範囲
+
+| 箇所 | 影響 |
+|---|---|
+| 8章 QR | 8.1〜8.6を新設。UC19はSUCCESS後の読取を明示 |
+| 9章 UI | 進行中は上部プレビューQR、成功時は成功画面で本物QR＋パズル演出（v4の役割分離を維持） |
+| v4未確定 | QRセル割当を解消 |
+| v5未確定⑦ | QRセル割当を解消 |
+| Flutter | 実装は8.6メモ（未着手）。DB変更は不要 |
