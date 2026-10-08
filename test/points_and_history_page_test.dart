@@ -3,6 +3,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:todo/features/history/history_repository.dart';
 import 'package:todo/features/home/home_page.dart';
 import 'package:todo/features/points/point_repository.dart';
+import 'package:todo/services/cashout_points_service.dart';
+import 'package:todo/services/mock_payment_service.dart';
+import 'package:todo/services/purchase_points_service.dart';
+
+class _NoOpInvoker implements MockPaymentFunctionInvoker {
+  @override
+  Future<MockPaymentFunctionResponse> invoke(
+    String functionName, {
+    required Map<String, dynamic> body,
+  }) async {
+    return const MockPaymentFunctionResponse(statusCode: 500, data: null);
+  }
+}
 
 class _FakePointRepository extends PointRepository {
   _FakePointRepository({this.points = 1500, this.transactions = const []});
@@ -15,6 +28,14 @@ class _FakePointRepository extends PointRepository {
 
   @override
   Future<List<PointTransactionItem>> fetchTransactions() async => transactions;
+
+  @override
+  Future<CashoutProgress> fetchCashoutProgress() async {
+    return CashoutProgress(
+      successCount: 4,
+      firstSuccessAt: DateTime.utc(2026, 10, 1),
+    );
+  }
 }
 
 class _FakeHistoryRepository extends HistoryRepository {
@@ -44,14 +65,26 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(body: PointsPage(repository: repo)),
+          home: Scaffold(
+            body: PointsPage(
+              repository: repo,
+              purchaseService: PurchasePointsService(invoker: _NoOpInvoker()),
+              cashoutService: CashoutPointsService(invoker: _NoOpInvoker()),
+            ),
+          ),
         ),
       );
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.text('2500 pt'), findsOneWidget);
       expect(find.text('教育用途ポイント（有効期限3か月・譲渡不可）'), findsOneWidget);
       expect(find.text('現金化条件と進捗'), findsOneWidget);
+      expect(find.text('4 / 7 回達成'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('チャレンジ失敗による付与'),
+        200,
+      );
       expect(find.text('+2500 pt'), findsOneWidget);
       expect(find.text('チャレンジ失敗による付与'), findsOneWidget);
     });

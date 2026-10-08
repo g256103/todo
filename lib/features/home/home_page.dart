@@ -5,7 +5,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../auth/auth_service.dart';
 import '../history/history_repository.dart';
+import '../points/point_catalog.dart';
 import '../points/point_repository.dart';
+import '../settings/settings_tab.dart';
+import '../../services/cashout_points_service.dart';
+import '../../services/purchase_points_service.dart';
 import 'mock_payment_home_page.dart';
 import '../routines/routine_editor_view.dart';
 import '../tasks/task_name_validator.dart';
@@ -36,7 +40,7 @@ class _TabbedHomePageState extends State<TabbedHomePage> {
     _pages = [
       const MockPaymentHomePage(),
       const PointsPage(),
-      _SettingsPage(authService: widget.authService, session: widget.session),
+      SettingsTab(authService: widget.authService, session: widget.session),
       const HistoryPage(),
       const TaskEditorPage(),
     ];
@@ -432,9 +436,16 @@ class _ErrorContent extends StatelessWidget {
 }
 
 class PointsPage extends StatefulWidget {
-  const PointsPage({super.key, this.repository});
+  const PointsPage({
+    super.key,
+    this.repository,
+    this.purchaseService,
+    this.cashoutService,
+  });
 
   final PointRepository? repository;
+  final PurchasePointsService? purchaseService;
+  final CashoutPointsService? cashoutService;
 
   @override
   State<PointsPage> createState() => _PointsPageState();
@@ -442,24 +453,33 @@ class PointsPage extends StatefulWidget {
 
 class _PointsPageState extends State<PointsPage> {
   late final PointRepository _repository;
+  late final PurchasePointsService _purchaseService;
+  late final CashoutPointsService _cashoutService;
   int _points = 0;
+  CashoutProgress _cashoutProgress = const CashoutProgress(successCount: 0);
   List<PointTransactionItem> _transactions = [];
   bool _isLoading = true;
+  bool _isActionInProgress = false;
+  String? _actionMessage;
 
   @override
   void initState() {
     super.initState();
     _repository = widget.repository ?? PointRepository();
+    _purchaseService = widget.purchaseService ?? PurchasePointsService();
+    _cashoutService = widget.cashoutService ?? CashoutPointsService();
     _loadPoints();
   }
 
   Future<void> _loadPoints() async {
     try {
       final points = await _repository.fetchAvailablePoints();
+      final progress = await _repository.fetchCashoutProgress();
       final txs = await _repository.fetchTransactions();
       if (!mounted) return;
       setState(() {
         _points = points;
+        _cashoutProgress = progress;
         _transactions = txs;
         _isLoading = false;
       });
@@ -469,11 +489,123 @@ class _PointsPageState extends State<PointsPage> {
     }
   }
 
+  Future<void> _purchaseItem(PointCatalogItem item) async {
+    if (_isActionInProgress) return;
+    setState(() {
+      _isActionInProgress = true;
+      _actionMessage = null;
+    });
+    try {
+      final result = await _purchaseService.purchase(catalogItemId: item.id);
+      if (!mounted) return;
+      setState(() => _points = result.availablePoints);
+      await _loadPoints();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('${result.itemName} と交換しました。')));
+    } on PurchasePointsApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _actionMessage = error.userMessage);
+    } finally {
+      if (mounted) setState(() => _isActionInProgress = false);
+    }
+  }
+
+  Future<void> _cashout() async {
+    if (_isActionInProgress) return;
+    final now = DateTime.now().toUtc();
+    if (!_cashoutProgress.isEligible(now)) return;
+
+    final pointsController = TextEditingController(text: '1000');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('ポイント現金化（モック）'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('出金ポイント（1000pt以上・10pt単位、手数料10%）'),
+              TextField(
+                controller: pointsController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'ポイント'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('申請'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+
+    final parsed = int.tryParse(pointsController.text.trim());
+    if (parsed == null) {
+      setState(() => _actionMessage = '出金ポイントを入力してください。');
+      return;
+    }
+
+    setState(() {
+      _isActionInProgress = true;
+      _actionMessage = null;
+    });
+    try {
+      final result = await _cashoutService.cashout(pointsUsed: parsed);
+      if (!mounted) return;
+      setState(() => _points = result.availablePoints);
+      await _loadPoints();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'モック出金: ¥${result.cashAmount}（手数料 ${result.feePoints}pt）',
+          ),
+        ),
+      );
+    } on CashoutPointsApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _actionMessage = error.userMessage);
+    } finally {
+      if (mounted) setState(() => _isActionInProgress = false);
+    }
+  }
+
+  String _transactionLabel(PointTransactionItem tx) {
+    switch (tx.type) {
+      case 'GRANT':
+        return 'チャレンジ失敗による付与';
+      case 'PURCHASE':
+        return '教材交換';
+      case 'CASHOUT':
+        return '現金化';
+      case 'EXPIRE':
+        return '有効期限切れ';
+      default:
+        return tx.type;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
+
+    final now = DateTime.now().toUtc();
+    final successCount = _cashoutProgress.successCount;
+    final daysLeft = _cashoutProgress.daysUntilContinuityMet(now);
+    final cashoutEligible = _cashoutProgress.isEligible(now);
+    final blockReason = _cashoutProgress.cashoutBlockReason(now);
 
     return RefreshIndicator(
       onRefresh: _loadPoints,
@@ -530,7 +662,7 @@ class _PointsPageState extends State<PointsPage> {
                   ),
                   const SizedBox(height: 12),
                   LinearProgressIndicator(
-                    value: 0.0,
+                    value: (successCount / 7).clamp(0.0, 1.0),
                     backgroundColor: Colors.grey.shade200,
                     valueColor: const AlwaysStoppedAnimation(Colors.green),
                   ),
@@ -539,14 +671,14 @@ class _PointsPageState extends State<PointsPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        '0 / 7 回達成',
+                        '$successCount / 7 回達成',
                         style: TextStyle(
                           fontSize: 11,
                           color: Colors.grey.shade600,
                         ),
                       ),
                       Text(
-                        'あと7回',
+                        daysLeft > 0 ? 'あと$daysLeft日' : '継続条件を満たしました',
                         style: TextStyle(
                           fontSize: 11,
                           color: Colors.grey.shade600,
@@ -554,6 +686,16 @@ class _PointsPageState extends State<PointsPage> {
                       ),
                     ],
                   ),
+                  if (blockReason != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      blockReason,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.orange.shade800,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -570,43 +712,74 @@ class _PointsPageState extends State<PointsPage> {
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
-              children: const [
+              children: [
+                for (final item in kPointPurchaseCatalog) ...[
+                  ListTile(
+                    leading: const Icon(Icons.menu_book, color: Colors.indigo),
+                    title: Text(item.name),
+                    subtitle: Text('${item.points} pt'),
+                    trailing: _isActionInProgress
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : TextButton(
+                            onPressed: _points >= item.points
+                                ? () => _purchaseItem(item)
+                                : null,
+                            child: const Text('交換'),
+                          ),
+                  ),
+                  if (item != kPointPurchaseCatalog.last)
+                    const Divider(height: 1),
+                ],
+                const Divider(height: 1),
                 ListTile(
-                  leading: Icon(Icons.menu_book, color: Colors.indigo),
-                  title: Text('学習教材・書籍と交換'),
-                  subtitle: Text('Phase 2にて提携先ストアで利用可能になります。'),
-                ),
-                Divider(height: 1),
-                ListTile(
-                  leading: Icon(Icons.account_balance, color: Colors.teal),
-                  title: Text('口座へ出金（現金化）'),
-                  subtitle: Text('達成条件を満たすと申請できます。'),
+                  leading: const Icon(
+                    Icons.account_balance,
+                    color: Colors.teal,
+                  ),
+                  title: const Text('口座へ出金（現金化・モック）'),
+                  subtitle: Text(
+                    cashoutEligible ? '条件を満たしています。' : '達成条件を満たすと申請できます。',
+                  ),
+                  trailing: FilledButton(
+                    onPressed: cashoutEligible && !_isActionInProgress
+                        ? _cashout
+                        : null,
+                    child: const Text('申請'),
+                  ),
                 ),
               ],
             ),
           ),
+          if (_actionMessage != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _actionMessage!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
           if (_transactions.isNotEmpty) ...[
             const SizedBox(height: 20),
-            const Text(
-              'ポイント獲得履歴',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
+            const Text('ポイント履歴', style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             for (final tx in _transactions)
               Card(
                 elevation: 0,
                 child: ListTile(
-                  title: Text(tx.type == 'GRANT' ? 'チャレンジ失敗による付与' : tx.type),
+                  title: Text(_transactionLabel(tx)),
                   subtitle: Text(
                     tx.expiresAt != null
                         ? '有効期限: ${tx.expiresAt!.year}/${tx.expiresAt!.month}/${tx.expiresAt!.day}'
                         : '',
                   ),
                   trailing: Text(
-                    '+${tx.amount} pt',
-                    style: const TextStyle(
+                    '${tx.amount > 0 ? '+' : ''}${tx.amount} pt',
+                    style: TextStyle(
                       fontWeight: FontWeight.bold,
-                      color: Colors.green,
+                      color: tx.amount >= 0 ? Colors.green : Colors.red,
                     ),
                   ),
                 ),
@@ -873,78 +1046,6 @@ class _ChallengeHistoryCard extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SettingsPage extends StatefulWidget {
-  const _SettingsPage({required this.authService, required this.session});
-
-  final AuthService authService;
-  final Session session;
-
-  @override
-  State<_SettingsPage> createState() => _SettingsPageState();
-}
-
-class _SettingsPageState extends State<_SettingsPage> {
-  bool _isSigningOut = false;
-  String? _errorMessage;
-
-  Future<void> _signOut() async {
-    setState(() {
-      _isSigningOut = true;
-      _errorMessage = null;
-    });
-    try {
-      await widget.authService.signOut();
-    } on AuthException catch (error) {
-      _setError(error.message);
-    } catch (error) {
-      _setError(error.toString());
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSigningOut = false;
-        });
-      }
-    }
-  }
-
-  void _setError(String message) {
-    if (!mounted) return;
-    setState(() {
-      _errorMessage = message;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (widget.session.user.email != null)
-              Text(widget.session.user.email!),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: _isSigningOut ? null : _signOut,
-              icon: const Icon(Icons.logout),
-              label: Text(_isSigningOut ? 'ログアウト中...' : 'ログアウト'),
-            ),
-            if (_errorMessage != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                _errorMessage!,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
-          ],
         ),
       ),
     );

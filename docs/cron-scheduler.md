@@ -28,8 +28,10 @@ Business logic stays in RPCs (`process_auto_start`, `process_deadlines`). Edge F
 | RPC | `process_deadlines()` | `GRANT` → `service_role` only | `integer` (challenges failed) |
 | Edge | `process-auto-start` | `POST`, `Authorization: Bearer ${AUTO_START_CRON_SECRET}` | `{ "started_count": number }` |
 | Edge | `process-deadlines` | `POST`, `Authorization: Bearer ${DEADLINES_CRON_SECRET \|\| AUTO_START_CRON_SECRET}` | `{ "processed_count": number }` |
+| RPC | `process_point_expiry()` | `GRANT` → `service_role` only | `integer` (grant rows expired) |
+| Edge | `process-point-expiry` | `POST`, `Authorization: Bearer ${POINT_EXPIRY_CRON_SECRET \|\| DEADLINES_CRON_SECRET \|\| AUTO_START_CRON_SECRET}` | `{ "expired_count": number }` |
 
-Both edges require `SUPABASE_SERVICE_ROLE_KEY` + `SUPABASE_URL` (injected on hosted; set locally for `functions serve`). RPC errors → HTTP `503` `{ "error_code": "temporary_unavailable" }`. Missing/wrong cron secret → `401`.
+Cron edges require `SUPABASE_SERVICE_ROLE_KEY` + `SUPABASE_URL` (injected on hosted; set locally for `functions serve`). RPC errors → HTTP `503` `{ "error_code": "temporary_unavailable" }`. Missing/wrong cron secret → `401`. **Remote `pg_cron` job for `process-point-expiry` is not scheduled yet — BLOCKED: USER APPROVAL REQUIRED** (same Vault/pg_net pattern as auto-start/deadlines).
 
 Domain (decision A): `process_deadlines` only touches `IN_PROGRESS` challenges past `deadline`. `process_auto_start` only `WAITING` with `auto_start_at <= now()` and `deadline > now()`.
 

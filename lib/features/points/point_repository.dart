@@ -1,5 +1,36 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+class CashoutProgress {
+  const CashoutProgress({required this.successCount, this.firstSuccessAt});
+
+  final int successCount;
+  final DateTime? firstSuccessAt;
+
+  bool isEligible(DateTime now) {
+    if (successCount < 7 || firstSuccessAt == null) return false;
+    return !now.isBefore(firstSuccessAt!.add(const Duration(days: 7)));
+  }
+
+  int daysUntilContinuityMet(DateTime now) {
+    if (firstSuccessAt == null) return 7;
+    final target = firstSuccessAt!.add(const Duration(days: 7));
+    if (!now.isBefore(target)) return 0;
+    final hours = target.difference(now).inHours;
+    return (hours <= 0) ? 0 : ((hours + 23) / 24).ceil();
+  }
+
+  String? cashoutBlockReason(DateTime now) {
+    if (successCount < 7) {
+      return 'チャレンジ成功が7回に達していません（現在 $successCount / 7）。';
+    }
+    final daysLeft = daysUntilContinuityMet(now);
+    if (daysLeft > 0) {
+      return '初回成功から1週間経過していません（あと $daysLeft 日）。';
+    }
+    return null;
+  }
+}
+
 class PointTransactionItem {
   const PointTransactionItem({
     required this.id,
@@ -51,6 +82,40 @@ class PointRepository {
     return (response['available_points'] as num?)?.toInt() ?? 0;
   }
 
+  Future<CashoutProgress> fetchCashoutProgress() async {
+    final user = _client.auth.currentUser;
+    if (user == null) {
+      return const CashoutProgress(successCount: 0);
+    }
+
+    final response = await _client
+        .from('challenges')
+        .select('finished_at')
+        .eq('user_id', user.id)
+        .eq('status', 'SUCCESS');
+
+    final rows = response as List<dynamic>;
+    if (rows.isEmpty) {
+      return const CashoutProgress(successCount: 0);
+    }
+
+    DateTime? firstSuccess;
+    for (final row in rows) {
+      final map = row as Map<String, dynamic>;
+      final raw = map['finished_at'];
+      if (raw is! String) continue;
+      final finished = DateTime.parse(raw).toUtc();
+      if (firstSuccess == null || finished.isBefore(firstSuccess)) {
+        firstSuccess = finished;
+      }
+    }
+
+    return CashoutProgress(
+      successCount: rows.length,
+      firstSuccessAt: firstSuccess,
+    );
+  }
+
   Future<List<PointTransactionItem>> fetchTransactions() async {
     final user = _client.auth.currentUser;
     if (user == null) return const [];
@@ -62,7 +127,9 @@ class PointRepository {
         .order('created_at', ascending: false);
 
     return (response as List<dynamic>)
-        .map((item) => PointTransactionItem.fromJson(item as Map<String, dynamic>))
+        .map(
+          (item) => PointTransactionItem.fromJson(item as Map<String, dynamic>),
+        )
         .toList(growable: false);
   }
 }
