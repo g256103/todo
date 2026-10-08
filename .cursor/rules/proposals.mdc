@@ -1,0 +1,18 @@
+---
+description: Next-step and option proposals must include reason, merits, and demerits
+alwaysApply: true
+---
+
+# Proposals and recommendations
+
+When the user asks what to do next, which approach to take, or when you voluntarily suggest work items, architecture choices, or priorities:
+
+1. Offer **2–4 concrete options** (or a ranked list). A single path is OK only when one option clearly dominates.
+2. For **each option**, include:
+   - **Reason** — why it matters now (tie to `docs/spec.md`, `docs/PROGRESS.md`, risk, or recent commits).
+   - **Merits** — benefits (user value, testability, unblocks other work).
+   - **Demerits** — costs, scope, flaky areas, or **blockers** (e.g. undecided spec, `BLOCKED: USER APPROVAL REQUIRED` from AGENTS.md).
+3. Close with a **recommended next action** (one clear first step).
+4. Match depth to the question: small fixes → short bullets; roadmap → fuller comparison.
+
+Reply to the user in **Japanese**; code and rule text stay in English.
